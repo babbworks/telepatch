@@ -1696,6 +1696,7 @@ async def send_pages(target, token):
         lines.append(
             f'• <a href="{page["url"]}">{page.get("title") or page["path"]}</a>'
             f' - {page.get("views", 0)} views'
+            f' · <a href="{EDITOR_URL}#{token}/{page["path"]}">edit</a>'
         )
 
     await target.reply_text(

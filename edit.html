@@ -140,6 +140,45 @@ main{flex:1 0 auto;padding-block:2.2rem 6rem}
 #body hr{border:0;border-top:1px solid var(--hair);margin:2.2rem 0}
 #body img{max-width:100%;height:auto}
 
+.byline{
+  font-family:var(--mono);font-size:.7rem;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--graphite);
+  margin:0 0 1rem;display:flex;flex-wrap:wrap;gap:.4rem;align-items:baseline;
+}
+.byline .sep2{opacity:.5}
+.byline [contenteditable]{
+  color:var(--ink);border-bottom:1px dotted var(--hair);min-width:6ch;
+}
+.byline [contenteditable]:focus{border-bottom-color:var(--patch)}
+.mini{
+  font-family:var(--mono);font-size:.62rem;text-transform:uppercase;
+  letter-spacing:.08em;background:none;border:0;padding:0;cursor:pointer;
+  color:var(--graphite);
+}
+.mini:hover{color:var(--lamp)}
+
+#who{cursor:text;border-bottom:1px dotted transparent}
+#who:hover{border-bottom-color:var(--hair)}
+#who:focus{outline:none;border-bottom-color:var(--patch);color:var(--ink)}
+
+.drawer{
+  border-bottom:1px solid var(--hair);background:#FAFBF9;
+  padding:.9rem var(--pad);margin:0 calc(-1 * var(--pad)) 1.6rem;
+}
+.drawer h2{
+  font-family:var(--mono);font-size:.62rem;font-weight:400;
+  text-transform:uppercase;letter-spacing:.11em;color:var(--graphite);
+  margin:0 0 .5rem;
+}
+.drawer ul{list-style:none;margin:0;padding:0}
+.drawer li{display:flex;gap:.75rem;align-items:baseline;padding:.25rem 0}
+.drawer .t{flex:1;min-width:0;font-size:.98rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drawer .when{font-family:var(--mono);font-size:.65rem;color:var(--graphite);white-space:nowrap}
+.drawer .warn{
+  font-family:var(--sans);font-size:.75rem;color:var(--graphite);
+  margin:.7rem 0 0;padding-top:.6rem;border-top:1px solid var(--hair);
+}
+
 .note{
   font-family:var(--sans);font-size:.8rem;color:var(--graphite);
   margin:2.5rem 0 0;padding-top:1rem;border-top:1px solid var(--hair);
@@ -160,6 +199,8 @@ main{flex:1 0 auto;padding-block:2.2rem 6rem}
   <div class="col">
     <span class="brand">Telepatch</span>
     <span class="who" id="who">…</span>
+    <button class="go" id="drafts">Drafts</button>
+    <button class="go" id="save" disabled>Save draft</button>
     <button class="go" id="go" disabled>Publish</button>
   </div>
 </nav>
@@ -187,9 +228,18 @@ main{flex:1 0 auto;padding-block:2.2rem 6rem}
 
 <main class="col" id="main">
   <p class="gate" id="gate">Checking your identity…</p>
+  <div class="drawer" id="drawer" hidden></div>
 
   <div id="sheet" hidden>
     <div id="title" contenteditable data-ph="Title"></div>
+
+    <p class="byline">
+      by <span id="by" contenteditable data-ph="author name"></span>
+      <span class="sep2">·</span>
+      <span id="byurl" contenteditable data-ph="author link (optional)"></span>
+      <button class="mini" id="reset" title="Use the account default">reset</button>
+    </p>
+
     <div id="cats" contenteditable data-ph="categories, comma separated"></div>
 
     <div class="ov">
@@ -374,6 +424,143 @@ function autoformat() {
   sel.addRange(range);
 }
 
+/* ---------- drafts ----------
+
+   localStorage, keyed by a hash of the token so one browser can hold
+   drafts for several identities without the token itself being written
+   down. Durability is genuinely uneven:
+
+     - Safari, desktop and iOS, evicts script-written storage after seven
+       days without a visit. A draft left for a fortnight is gone.
+     - Private windows clear everything on close.
+     - Storage is per-origin and per-browser: a draft started on a phone
+       is not on a laptop.
+
+   So drafts are a convenience for the next hour, not a filing cabinet,
+   and the drawer says so rather than implying otherwise. */
+
+function keyspace(t) {
+  let h = 5381;
+  for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0;
+  return "telepatch:" + (h >>> 0).toString(36) + ":";
+}
+
+const NS = keyspace(token);
+let draftId = null;
+
+function storageOk() {
+  try {
+    localStorage.setItem(NS + "probe", "1");
+    localStorage.removeItem(NS + "probe");
+    return true;
+  } catch (err) {
+    return false;   // private mode, quota, or storage disabled outright
+  }
+}
+
+const HAS_STORE = storageOk();
+
+function draftList() {
+  const out = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k || !k.startsWith(NS) || k === NS + "probe") continue;
+    try { out.push(JSON.parse(localStorage.getItem(k))); } catch (err) { /* skip */ }
+  }
+  return out.sort((a, b) => (b.updated || 0) - (a.updated || 0));
+}
+
+function snapshot() {
+  return {
+    id: draftId || (draftId = String(Date.now())),
+    path,
+    title: $("title").textContent.trim(),
+    cats: $("cats").textContent.trim(),
+    by: $("by").textContent.trim(),
+    byurl: $("byurl").textContent.trim(),
+    overview: $("overview").innerHTML,
+    body: $("body").innerHTML,
+    updated: Date.now()
+  };
+}
+
+function saveDraft(quiet) {
+  if (!HAS_STORE) { if (!quiet) say("This browser will not store drafts.", true); return; }
+  const d = snapshot();
+  if (!d.title && !d.body.trim()) return;
+  try {
+    localStorage.setItem(NS + d.id, JSON.stringify(d));
+    if (!quiet) say("Draft saved in this browser.");
+  } catch (err) {
+    say("Could not save the draft — this browser's storage is full.", true);
+  }
+}
+
+function loadDraft(d) {
+  draftId = d.id;
+  path = d.path || "";
+  $("title").textContent = d.title || "";
+  $("cats").textContent = d.cats || "";
+  $("by").textContent = d.by || "";
+  $("byurl").textContent = d.byurl || "";
+  $("overview").innerHTML = d.overview || "";
+  $("body").innerHTML = d.body || "";
+  location.hash = token + (path ? "/" + path : "");
+  syncToc();
+  $("drawer").hidden = true;
+  say("Draft opened.");
+}
+
+function when(ms) {
+  const mins = Math.round((Date.now() - ms) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return mins + "m ago";
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return hrs + "h ago";
+  return Math.round(hrs / 24) + "d ago";
+}
+
+function toggleDrawer() {
+  const box = $("drawer");
+  if (!box.hidden) { box.hidden = true; return; }
+
+  box.replaceChildren(el("h2", null, "Drafts in this browser"));
+
+  const items = HAS_STORE ? draftList() : [];
+
+  if (!items.length) {
+    box.appendChild(el("p", "warn", HAS_STORE
+      ? "Nothing saved yet."
+      : "This browser is refusing to store anything — a private window, or storage turned off."));
+  } else {
+    const list = el("ul");
+    for (const d of items) {
+      const li = el("li");
+      const open = el("button", "mini", "open");
+      open.addEventListener("click", () => loadDraft(d));
+      const drop = el("button", "mini", "delete");
+      drop.addEventListener("click", () => {
+        localStorage.removeItem(NS + d.id);
+        toggleDrawer(); toggleDrawer();
+      });
+      li.append(
+        el("span", "t", d.title || "Untitled"),
+        el("span", "when", when(d.updated)),
+        open, drop
+      );
+      list.appendChild(li);
+    }
+    box.appendChild(list);
+  }
+
+  box.appendChild(el("p", "warn",
+    "Drafts live only in this browser, on this device. Safari clears " +
+    "script storage after about a week without a visit, and private " +
+    "windows clear it on close. Publish anything you mean to keep."));
+
+  box.hidden = false;
+}
+
 /* ---------- publish ---------- */
 
 async function publish() {
@@ -402,13 +589,18 @@ async function publish() {
       access_token: token,
       title,
       content: JSON.stringify(content),
-      author_name: account.author_name || account.short_name || "",
-      author_url: account.author_url || ""
+      author_name: $("by").textContent.trim(),
+      author_url: safeUrl($("byurl").textContent.trim()) || ""
     };
     if (path) params.path = path;
 
     const page = await call(path ? "editPage" : "createPage", params);
     path = page.path;
+
+    if (HAS_STORE && draftId) {
+      localStorage.removeItem(NS + draftId);
+      draftId = null;
+    }
     location.hash = token + "/" + path;
 
     const link = el("a", null, page.url);
@@ -452,6 +644,11 @@ async function start() {
   }
 
   $("who").textContent = account.author_name || account.short_name || "";
+  $("by").textContent = account.author_name || account.short_name || "";
+  $("byurl").textContent = account.author_url || "";
+  $("who").setAttribute("contenteditable", "true");
+  $("who").title = "Click to change the account byline";
+  $("save").disabled = false;
   $("gate").hidden = true;
   $("sheet").hidden = false;
   $("tools").hidden = false;
@@ -461,6 +658,8 @@ async function start() {
     try {
       const page = await call("getPage", { path, return_content: "true" });
       $("title").textContent = page.title || "";
+      if (page.author_name) $("by").textContent = page.author_name;
+      if (page.author_url) $("byurl").textContent = page.author_url;
       const nodes = (page.content || []).slice();
 
       if (nodes[0] && nodes[0].tag === "aside") {
@@ -527,6 +726,49 @@ for (const b of document.querySelectorAll(".tools button")) {
 
 $("body").addEventListener("input", () => { autoformat(); syncToc(); });
 $("go").addEventListener("click", publish);
+$("save").addEventListener("click", () => saveDraft(false));
+$("drafts").addEventListener("click", toggleDrawer);
+
+$("reset").addEventListener("click", () => {
+  $("by").textContent = account.author_name || account.short_name || "";
+  $("byurl").textContent = account.author_url || "";
+  say("Byline reset to the account default.");
+});
+
+/* Clicking the name in the bar edits the account's own byline — the
+   default every future post starts from. It does not touch this post, and
+   it does not change anything already published: each page stores the
+   byline it was given. */
+$("who").addEventListener("focus", () => {
+  $("who").dataset.was = $("who").textContent.trim();
+});
+$("who").addEventListener("blur", async () => {
+  const name = $("who").textContent.trim();
+  if (!name || name === $("who").dataset.was) {
+    $("who").textContent = $("who").dataset.was || "";
+    return;
+  }
+  try {
+    await call("editAccountInfo", { access_token: token, author_name: name });
+    account.author_name = name;
+    say("Account byline is now " + name + ". Posts already published keep theirs.");
+  } catch (err) {
+    $("who").textContent = $("who").dataset.was || "";
+    say(err.message, true);
+  }
+});
+$("who").addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); $("who").blur(); }
+});
+
+// Autosave, debounced. Cheap insurance against a closed tab.
+let autosave;
+for (const id of ["title", "cats", "by", "byurl", "overview", "body"]) {
+  $(id).addEventListener("input", () => {
+    clearTimeout(autosave);
+    autosave = setTimeout(() => saveDraft(true), 1200);
+  });
+}
 
 // Paste as plain text: pasted markup is the fastest way to smuggle tags
 // Telegraph will only strip.
