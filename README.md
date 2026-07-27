@@ -54,6 +54,7 @@ you should never need to paste it.
 | `/revise` | Rewrite a post — reply to its **Published** message |
 | `/site` | Build or refresh the public index |
 | `/about` | Set the introduction shown above your index |
+| `/footer` | Set the footer shown at the bottom of every page |
 | `/manage` | Byline, author URL, revoke |
 | `/views <url>` | Title, byline and views for any Telegraph page — **no token needed** |
 | `/privacy` | What the bot keeps, and what it cannot protect |
@@ -115,7 +116,8 @@ act.
 The master post is also the only durable record Telepatch has. Telegraph
 exposes no publication date, so `/site` writes one and reads it back before
 each rebuild. Prose typed above the list — your site's introduction, set with
-`/about` — is preserved the same way. Nothing is remembered by the bot; the
+`/about` — and prose typed below it, your footer, set with `/footer` — are
+preserved the same way. Nothing is remembered by the bot; the
 page itself is the memory, and the publisher owns it.
 
 Running `/site` again rewrites that page rather than creating another.

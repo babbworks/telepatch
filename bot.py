@@ -1022,6 +1022,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         "/privacy - what this bot keeps (nothing)\n"
         "/about - set your site's introduction\n"
+        "/footer - set your site's footer\n"
         "/telepatch - about Telepatch",
 
         parse_mode=ParseMode.HTML,
@@ -1144,22 +1145,21 @@ async def new(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def about_site(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def find_site(update, context, command):
     """
-    Set the introduction that appears above the index on your site.
-
-    Replying to the pinned Site message supplies both the token and the
-    index path for free; otherwise the index has to be hunted for.
+    The index path for a command that edits it. Replying to the pinned Site
+    message supplies it for free; otherwise it has to be hunted for.
+    Returns (token, path) with either possibly None, having already replied.
     """
 
     token = token_for(update, context)
 
     if not token:
         await update.message.reply_text(
-            token_hint("/about"),
+            token_hint(command),
             parse_mode=ParseMode.HTML,
         )
-        return
+        return None, None
 
     _, _, extras = read_carrier(update.message)
 
@@ -1173,8 +1173,21 @@ async def about_site(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not path:
         await update.message.reply_text(
-            "You have no index yet. Run /site first, then /about."
+            f"You have no index yet. Run /site first, then {command}."
         )
+        return token, None
+
+    return token, path
+
+
+async def about_site(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Set the introduction that appears above the index on your site.
+    """
+
+    token, path = await find_site(update, context, "/about")
+
+    if not path:
         return
 
     await update.message.reply_text(
@@ -1188,6 +1201,78 @@ async def about_site(update: Update, context: ContextTypes.DEFAULT_TYPE):
             selective=True,
             input_field_placeholder="a sentence or two",
         ),
+    )
+
+
+async def footer_site(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Set the note that appears at the foot of every page on your site.
+    """
+
+    token, path = await find_site(update, context, "/footer")
+
+    if not path:
+        return
+
+    await update.message.reply_text(
+        "Reply with the footer for your site.\n\n"
+        "It appears at the bottom of every page, above the Telepatch line. "
+        "Bold, italics and links are kept.\n\n"
+        "Send <code>-</code> to remove it."
+        + carrier_link("footer", token, site=path),
+        parse_mode=ParseMode.HTML,
+        reply_markup=ForceReply(
+            selective=True,
+            input_field_placeholder="a line or two",
+        ),
+    )
+
+
+async def set_footer(message, token, path):
+    """
+    Replace the closing note, leaving the masthead and the generated list
+    alone. Two requests rather than a full rescan.
+    """
+
+    try:
+        page = telegraph("getPage", path=path, return_content="true")
+
+    except Exception as error:
+        await message.reply_text(f"Could not find your index:\n{error}")
+        return
+
+    text = message.text.strip()
+
+    footer = [] if is_clear(text) else to_content(message.text_html or text)
+
+    head, middle, _ = split_master(page.get("content"))
+
+    content = head + middle + footer + [
+        {"tag": "p", "children": [MASTER_MARK]}
+    ]
+
+    try:
+        telegraph(
+            "editPage",
+            access_token=token,
+            path=path,
+            title=page["title"],
+            content=json.dumps(content),
+            author_name=page.get("author_name") or "",
+            author_url=page.get("author_url") or "",
+        )
+
+    except Exception as error:
+        await message.reply_text(f"Could not save it:\n{error}")
+        return
+
+    await message.reply_text(
+        ("Footer removed." if not footer else "Footer saved.")
+        + f"\n\n{SITE_URL}#{path}\n\n"
+        "Reply to this message with /footer to change it again."
+        + carrier_link("page", token, site=path),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
     )
 
 
@@ -1208,7 +1293,8 @@ async def set_masthead(message, token, path):
 
     masthead = [] if is_clear(text) else to_content(message.text_html or text)
 
-    _, rest = split_masthead(page.get("content"))
+    _, middle, foot = split_master(page.get("content"))
+    rest = middle + foot + [{"tag": "p", "children": [MASTER_MARK]}]
 
     try:
         telegraph(
@@ -1724,47 +1810,53 @@ def read_masthead(content):
     nothing between runs.
     """
 
-    masthead = []
-
-    for node in content or []:
-
-        if not isinstance(node, dict):
-            continue
-
-        if node.get("tag") == "ul":
-            break
-
-        text = node_text(node).strip()
-
-        if any(mark in text for mark in INDEX_MARKS):
-            break
-
-        if text == EMPTY_NOTICE:
-            continue
-
-        masthead.append(node)
-
-    return masthead
+    return split_master(content)[0]
 
 
-def split_masthead(content):
+def split_master(content):
     """
-    Return (masthead, rest) where rest begins at the index list. Used when
-    replacing the introduction without regenerating the list.
+    Split a master post into (masthead, list, footer).
+
+    The generated list sits in the middle; the publisher's own prose sits
+    above it and below it. Splitting three ways lets either be replaced
+    without regenerating the other or the list between them.
     """
 
-    for i, node in enumerate(content or []):
+    nodes = list(content or [])
+    at = None
+
+    for i, node in enumerate(nodes):
 
         if not isinstance(node, dict):
             continue
 
         if node.get("tag") == "ul" or node_text(node).strip() == EMPTY_NOTICE:
-            return content[:i], content[i:]
+            at = i
+            break
 
-    return list(content or []), []
+    if at is None:
+        return nodes, [], []
+
+    def keep(node):
+        return not any(m in node_text(node) for m in INDEX_MARKS)
+
+    return (
+        [n for n in nodes[:at] if keep(n)],
+        [nodes[at]],
+        [n for n in nodes[at + 1:] if keep(n)],
+    )
 
 
-def build_index(scanned, master_path=None, known_dates=None, masthead=None):
+def read_footer(content):
+    """
+    The publisher's own closing note, kept across rebuilds like the masthead.
+    """
+
+    return split_master(content)[2]
+
+
+def build_index(scanned, master_path=None, known_dates=None,
+                masthead=None, footer=None):
     """
     Lay the account's articles out as the content of one master post.
 
@@ -1844,6 +1936,7 @@ def build_index(scanned, master_path=None, known_dates=None, masthead=None):
         else {"tag": "p", "children": [EMPTY_NOTICE]}
     )
 
+    content.extend(footer or [])
     content.append({"tag": "p", "children": [MASTER_MARK]})
 
     return entries, content
@@ -1895,8 +1988,11 @@ async def rebuild_site(message, token, master_path=None, title=None):
 
     known_dates = read_index_dates(old)
     masthead = read_masthead(old)
+    footer = read_footer(old)
 
-    entries, content = build_index(scanned, master_path, known_dates, masthead)
+    entries, content = build_index(
+        scanned, master_path, known_dates, masthead, footer
+    )
 
     byline = info.get("author_name") or info.get("short_name") or ""
 
@@ -2110,6 +2206,10 @@ async def on_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await set_masthead(update.message, token, extras.get("site", ""))
         return
 
+    if field == "footer":
+        await set_footer(update.message, token, extras.get("site", ""))
+        return
+
     if field in ("post", "anon"):
 
         override = ("n" in extras) and (extras.get("n", ""), extras.get("u", ""))
@@ -2174,6 +2274,7 @@ async def register_commands(app):
         ("revise", "Rewrite a post - reply to its Published message"),
         ("site", "Build or refresh your public index"),
         ("about", "Set the introduction on your site"),
+        ("footer", "Set the footer on your site"),
         ("manage", "Byline, URL, revoke - reply to your pinned identity"),
         ("views", "Views for any page: /views <url>"),
         ("privacy", "What this bot keeps (nothing)"),
@@ -2206,6 +2307,7 @@ def main():
     app.add_handler(CommandHandler("revise", revise))
     app.add_handler(CommandHandler("site", site))
     app.add_handler(CommandHandler("about", about_site))
+    app.add_handler(CommandHandler("footer", footer_site))
     app.add_handler(CommandHandler("views", views))
 
     app.add_handler(CallbackQueryHandler(on_button))

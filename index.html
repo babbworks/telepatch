@@ -370,6 +370,16 @@ footer a{color:var(--graphite)}
 /* Each sentence wraps as one unit. They sit on a single line when there is
    room and stack into three when there is not. */
 footer .fpart{display:inline-block;margin-right:.4rem}
+/* The publisher's own footer, set in the reading face and a shade darker
+   than the attribution line beneath it. */
+.sitefoot{
+  font-family:var(--serif);font-size:.95rem;line-height:1.55;
+  color:var(--ink);max-width:42rem;
+  margin:0 0 1.1rem;padding-bottom:1.1rem;
+  border-bottom:1px solid var(--hair);
+}
+.sitefoot p{margin:0 0 .6rem}
+.sitefoot p:last-child{margin-bottom:0}
 footer .fpart:last-child{margin-right:0}
 
 /* The gutter offset only fits once the viewport clears the column plus
@@ -587,12 +597,17 @@ function parseMaster(content) {
   const nodes = content || [];
   const cut = nodes.findIndex(n => n && n.tag === "ul");
 
-  if (cut === -1) return { masthead: [], entries: collect(nodes, []) };
+  const keep = n => !MARKS.some(m => textOf(n).includes(m));
 
-  const masthead = nodes.slice(0, cut).filter(
-    n => !MARKS.some(m => textOf(n).includes(m)));
+  if (cut === -1) {
+    return { masthead: [], footer: [], entries: collect(nodes, []) };
+  }
 
-  return { masthead, entries: collect(nodes[cut].children, []) };
+  return {
+    masthead: nodes.slice(0, cut).filter(keep),
+    footer: nodes.slice(cut + 1).filter(keep),
+    entries: collect(nodes[cut].children, [])
+  };
 }
 
 /* ---------- article rendering ----------
@@ -705,7 +720,7 @@ function splitAside(content) {
 const boot = $("boot");
 let master = null, masterPage = null;
 let posts = [], navItems = [], cats = [], navPaths = new Set();
-let masthead = [];
+let masthead = [], sitefoot = [];
 let currentArticle = null;
 let active = null, query = "";
 
@@ -1032,6 +1047,14 @@ function buildBar() {
 
 function buildFooter() {
   const f = $("foot");
+
+  // The publisher's own note, above the line crediting the tools.
+  if (sitefoot.length) {
+    const theirs = el("div", "sitefoot");
+    renderNodes(sitefoot, theirs, master);
+    f.appendChild(theirs);
+  }
+
   const p = el("p");
 
   // "assembled" becomes a link once the Telepatch project site has a page
@@ -1092,6 +1115,7 @@ async function start(r) {
 
   const parsed = parseMaster(masterPage.content);
   masthead = parsed.masthead;
+  sitefoot = parsed.footer;
   const entries = parsed.entries;
   navItems = entries.filter(isNav);
   navPaths = new Set(navItems.map(e => e.path).filter(Boolean));
