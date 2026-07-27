@@ -166,7 +166,10 @@ a{color:var(--patch)}
   font-family:var(--mono);font-size:.7rem;
   text-transform:uppercase;letter-spacing:.09em;
   color:var(--graphite);
-  margin:2.5rem 0 1.1rem;
+  /* Equal margins put the author line midway between the bar above it and
+     the About heading below. #masthead has overflow:hidden, so neither
+     margin collapses out and the two gaps really are the same. */
+  margin:2rem 0;
   opacity:0;transition:opacity .5s ease .15s;
 }
 .sitemeta.in{opacity:1}
@@ -176,6 +179,13 @@ main{padding-block-end:6rem;min-height:0;flex:1 0 auto}
 /* The publisher's own introduction, set larger than the index it heads.
    Named lede to avoid colliding with #masthead, which wraps the narration. */
 .lede{margin:0 0 2rem;font-size:1.12rem;line-height:1.6;max-width:42rem}
+/* Heads the introduction. Same size as the prose it introduces, so it reads
+   as a run-in heading rather than a second label under the author line. */
+.ledehead{
+  font-family:var(--serif);font-size:1.12rem;font-weight:700;
+  letter-spacing:-.01em;color:var(--ink);
+  margin:0 0 .35rem;
+}
 .lede p{margin:0 0 .9rem}
 .lede p:last-child{margin-bottom:0}
 .lede h3{font-size:1.2rem;margin:1.4rem 0 .5rem}
@@ -644,6 +654,7 @@ function showIndex() {
 
   if (masthead.length) {
     const intro = el("div", "lede");
+    intro.appendChild(el("h2", "ledehead", "About"));
     renderNodes(masthead, intro, master);
     view.appendChild(intro);
   }
