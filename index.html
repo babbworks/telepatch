@@ -44,7 +44,9 @@ html{
      form and wins where it is supported. */
   overflow-y:scroll;
   scrollbar-gutter:stable;
+  scroll-behavior:smooth;
 }
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
 body{
   margin:0;
   background:var(--paper);
@@ -288,6 +290,24 @@ main{padding-block-end:6rem;min-height:0;flex:1 0 auto}
   margin:0 0 .5rem;
 }
 .article .tags{margin:0 0 2rem}
+
+/* Contents, built from the h3 and h4 headings Telegraph allows. */
+.toc{
+  margin:0 0 2.2rem;padding:.9rem 0 1rem;
+  border-top:1px solid var(--hair);border-bottom:1px solid var(--hair);
+}
+.toclabel{
+  font-family:var(--mono);font-size:.65rem;font-weight:400;
+  text-transform:uppercase;letter-spacing:.1em;
+  color:var(--graphite);margin:0 0 .55rem;
+}
+.toclist{list-style:none;margin:0;padding:0}
+.toclist li{margin:.22rem 0}
+.toclist li.sub{padding-left:1.2rem}
+.toclist a{font-size:.98rem;line-height:1.35;color:var(--ink);text-decoration:none}
+.toclist a:hover{color:var(--patch)}
+/* Clear the sticky bar when jumping to a heading. */
+.body h3,.body h4{scroll-margin-top:4rem}
 .body{font-size:1.06rem;line-height:1.72}
 .body p{margin:0 0 1.25rem}
 .body h3{font-size:1.45rem;line-height:1.25;margin:2.4rem 0 .7rem}
@@ -429,11 +449,20 @@ function route() {
   h = h.replace(/^\/+|\/+$/g, "");
   if (!h) return {};
   const parts = h.split("/").filter(Boolean);
-  return { master: parts[0], article: parts[1] || null };
+  return {
+    master: parts[0],
+    article: parts[1] || null,
+    anchor: parts[2] || null
+  };
 }
 
-const link = (master, article) =>
-  "#" + master + (article ? "/" + article : "");
+/* A heading is a third path segment rather than a normal "#id" fragment,
+   because the fragment is already carrying the route. This way a link to a
+   section is a real, shareable URL instead of a scroll side effect. */
+const link = (master, article, anchor) =>
+  "#" + master +
+  (article ? "/" + article : "") +
+  (anchor ? "/" + anchor : "");
 
 /* ---------- Telegraph helpers ---------- */
 
@@ -613,6 +642,52 @@ function renderNodes(nodes, parent, master) {
   }
 }
 
+/* ---------- contents ----------
+   h3 and h4 are the only headings Telegraph accepts, so they are the whole
+   outline. Anything with two or more gets a table of contents; one heading
+   is not a structure worth listing. */
+
+function slugify(text, used) {
+  const base = text.toLowerCase().trim()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-+|-+$/g, "") || "section";
+
+  let slug = base;
+  let n = 2;
+  while (used.has(slug)) slug = base + "-" + n++;
+  used.add(slug);
+  return slug;
+}
+
+function buildToc(body, path) {
+  const heads = [...body.querySelectorAll("h3, h4")];
+  if (heads.length < 2) return null;
+
+  const used = new Set();
+  const nav = el("nav", "toc");
+  nav.setAttribute("aria-label", "Contents");
+  nav.appendChild(el("h2", "toclabel", "Contents"));
+
+  const list = el("ul", "toclist");
+
+  for (const h of heads) {
+    h.id = slugify(h.textContent, used);
+    const li = el("li", h.tagName === "H4" ? "sub" : null);
+    const a = el("a", null, h.textContent);
+    a.href = link(master, path, h.id);
+    li.appendChild(a);
+    list.appendChild(li);
+  }
+
+  nav.appendChild(list);
+  return nav;
+}
+
+function scrollToAnchor(slug) {
+  const target = slug && document.getElementById(slug);
+  if (target) target.scrollIntoView();
+}
+
 /* The leading <aside> is the category line written by /post. It is shown
    as tags under the title, so it is not repeated in the body. */
 function splitAside(content) {
@@ -631,6 +706,7 @@ const boot = $("boot");
 let master = null, masterPage = null;
 let posts = [], navItems = [], cats = [], navPaths = new Set();
 let masthead = [];
+let currentArticle = null;
 let active = null, query = "";
 
 async function say(text, cls) {
@@ -650,6 +726,7 @@ function matches(e) {
 /* ---------- views ---------- */
 
 function showIndex() {
+  currentArticle = null;
   document.title = masterPage.title;
   syncMeta();
   const view = $("view");
@@ -789,6 +866,10 @@ async function showArticle(path) {
 
   const body = el("div", "body");
   renderNodes(nodes, body, master);
+
+  const toc = buildToc(body, path);
+  if (toc) art.appendChild(toc);
+
   art.appendChild(body);
 
   if (!isPage && entry) {
@@ -821,7 +902,11 @@ async function showArticle(path) {
   art.appendChild(origin);
 
   view.appendChild(art);
-  scrollTo(0, 0);
+  currentArticle = path;
+
+  const wanted = route().anchor;
+  if (wanted) scrollToAnchor(wanted); else scrollTo(0, 0);
+
   syncBar();
   checkAlign();
 }
@@ -1035,6 +1120,10 @@ async function start(r) {
   addEventListener("hashchange", () => {
     const next = route();
     if (next.master !== master) { location.reload(); return; }
+    if (next.article && next.article === currentArticle) {
+      scrollToAnchor(next.anchor);
+      return;
+    }
     show(next);
   });
 }
