@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Write · Telepatch</title>
+<style>
+/* ---------------------------------------------------------------
+   The editor. Deliberately paler than the published site: a white
+   sheet under the same bar, so writing feels like a different room
+   from reading. Only the tags Telegraph accepts are reachable.
+----------------------------------------------------------------*/
+:root{
+  --paper:#FFFFFF;
+  --ink:#14181A;
+  --graphite:#5C6562;
+  --hair:#DCDFDA;
+  --patch:#1C5A4E;
+  --lamp:#C4342A;
+
+  --serif:Georgia,"Iowan Old Style","Palatino Linotype",Palatino,serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+
+  --col:52rem;
+  --pad:1.5rem;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;overflow-y:scroll;scrollbar-gutter:stable}
+body{
+  margin:0;background:var(--paper);color:var(--ink);
+  font-family:var(--serif);font-size:17px;line-height:1.6;
+  display:flex;flex-direction:column;min-height:100vh;min-height:100dvh;
+}
+a{color:var(--patch)}
+:focus-visible{outline:2px solid var(--lamp);outline-offset:3px}
+.col{width:min(100%,var(--col));margin-inline:auto;padding-inline:var(--pad)}
+
+/* ---- the same bar as the site ---- */
+.bar{
+  position:sticky;top:0;z-index:20;background:var(--paper);
+  border-bottom:1px solid var(--hair);
+}
+.bar .col{
+  display:flex;align-items:baseline;gap:1rem;padding-block:.6rem;
+}
+.brand{
+  font-family:var(--serif);font-size:1rem;font-weight:700;
+  letter-spacing:-.01em;color:var(--ink);text-decoration:none;white-space:nowrap;
+}
+.who{
+  font-family:var(--mono);font-size:.7rem;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--graphite);
+  flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.go{
+  font-family:var(--mono);font-size:.7rem;text-transform:uppercase;
+  letter-spacing:.08em;background:none;border:0;padding:0;cursor:pointer;
+  color:var(--patch);white-space:nowrap;
+}
+.go:hover{color:var(--lamp)}
+.go[disabled]{color:var(--graphite);cursor:default}
+
+/* ---- toolbar: exactly what Telegraph accepts, nothing more ---- */
+.tools{
+  position:sticky;top:2.6rem;z-index:19;background:var(--paper);
+  border-bottom:1px solid var(--hair);
+}
+.tools .col{display:flex;flex-wrap:wrap;gap:.15rem;padding-block:.4rem}
+.tools button{
+  font-family:var(--mono);font-size:.7rem;
+  background:none;border:0;border-radius:3px;padding:.3rem .45rem;
+  color:var(--graphite);cursor:pointer;line-height:1;
+}
+.tools button:hover{background:#F1F3EF;color:var(--ink)}
+.tools .sep{width:1px;background:var(--hair);margin:.2rem .35rem}
+.tools b{font-weight:700}.tools i{font-style:italic}
+.tools s{text-decoration:line-through}.tools u{text-decoration:underline}
+
+main{flex:1 0 auto;padding-block:2.2rem 6rem}
+
+/* ---- fields ---- */
+[contenteditable]{outline:none}
+[contenteditable]:empty:before{
+  content:attr(data-ph);color:#AFB5AF;pointer-events:none;
+}
+#title{
+  font-size:2.3rem;line-height:1.12;font-weight:700;letter-spacing:-.015em;
+  margin:0 0 .5rem;
+}
+#cats{
+  font-family:var(--mono);font-size:.7rem;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--graphite);margin:0 0 1.4rem;
+}
+
+/* The overview is the article's intro: a blockquote at the top of the
+   page, which the site lifts out and sets as a standfirst. */
+.ov{
+  border-left:2px solid var(--hair);padding-left:1.1rem;margin:0 0 1.6rem;
+}
+.ovlabel{
+  font-family:var(--mono);font-size:.62rem;text-transform:uppercase;
+  letter-spacing:.11em;color:var(--graphite);margin:0 0 .3rem;
+}
+#overview{font-size:1.18rem;line-height:1.55;color:var(--graphite);min-height:1.6em}
+
+/* Contents is a preview. It is never stored — the site rebuilds it from
+   the headings, so what is shown here is what a reader will get. */
+.toc{
+  border-top:1px solid var(--hair);border-bottom:1px solid var(--hair);
+  padding:.8rem 0 .9rem;margin:0 0 1.6rem;
+}
+.toc.off{display:none}
+.toclabel{
+  font-family:var(--mono);font-size:.62rem;text-transform:uppercase;
+  letter-spacing:.11em;color:var(--graphite);margin:0 0 .45rem;
+}
+.toc ul{list-style:none;margin:0;padding:0}
+.toc li{font-size:.96rem;line-height:1.35;margin:.18rem 0}
+.toc li.sub{padding-left:1.2rem}
+
+/* The permanent rule. Everything below it is the article. */
+.divider{border:0;border-top:2px solid var(--ink);margin:0 0 1.6rem;opacity:.14}
+
+#body{font-size:1.06rem;line-height:1.72;min-height:40vh}
+#body p{margin:0 0 1.25rem}
+#body h3{font-size:1.45rem;line-height:1.25;margin:2.2rem 0 .7rem}
+#body h4{font-size:1.12rem;margin:1.8rem 0 .5rem}
+#body blockquote{
+  margin:1.4rem 0;padding-left:1.1rem;
+  border-left:2px solid var(--hair);color:var(--graphite);
+}
+#body pre{
+  background:#F4F6F3;padding:.9rem;overflow-x:auto;
+  font-family:var(--mono);font-size:.85rem;
+}
+#body code{font-family:var(--mono);font-size:.9em;background:#F4F6F3;padding:.1em .3em}
+#body ul,#body ol{margin:0 0 1.25rem;padding-left:1.4rem}
+#body hr{border:0;border-top:1px solid var(--hair);margin:2.2rem 0}
+#body img{max-width:100%;height:auto}
+
+.note{
+  font-family:var(--sans);font-size:.8rem;color:var(--graphite);
+  margin:2.5rem 0 0;padding-top:1rem;border-top:1px solid var(--hair);
+}
+.note b{color:var(--ink)}
+.err{color:var(--lamp)}
+.gate{font-family:var(--sans);font-size:.95rem;color:var(--graphite);margin:3rem 0}
+@media (max-width:34rem){
+  :root{--pad:1.1rem}
+  #title{font-size:1.75rem}
+  .tools .col{gap:.1rem}
+}
+</style>
+</head>
+<body>
+
+<nav class="bar">
+  <div class="col">
+    <span class="brand">Telepatch</span>
+    <span class="who" id="who">…</span>
+    <button class="go" id="go" disabled>Publish</button>
+  </div>
+</nav>
+
+<div class="tools" id="tools" hidden>
+  <div class="col">
+    <button data-cmd="bold" title="Bold"><b>B</b></button>
+    <button data-cmd="italic" title="Italic"><i>I</i></button>
+    <button data-cmd="underline" title="Underline"><u>U</u></button>
+    <button data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
+    <button data-link title="Link">link</button>
+    <span class="sep"></span>
+    <button data-block="h3" title="Heading">H3</button>
+    <button data-block="h4" title="Subheading">H4</button>
+    <button data-block="blockquote" title="Quote">quote</button>
+    <button data-block="pre" title="Code block">code</button>
+    <span class="sep"></span>
+    <button data-cmd="insertUnorderedList" title="Bulleted list">• list</button>
+    <button data-cmd="insertOrderedList" title="Numbered list">1. list</button>
+    <button data-cmd="insertHorizontalRule" title="Divider">rule</button>
+    <span class="sep"></span>
+    <button data-block="p" title="Plain paragraph">plain</button>
+  </div>
+</div>
+
+<main class="col" id="main">
+  <p class="gate" id="gate">Checking your identity…</p>
+
+  <div id="sheet" hidden>
+    <div id="title" contenteditable data-ph="Title"></div>
+    <div id="cats" contenteditable data-ph="categories, comma separated"></div>
+
+    <div class="ov">
+      <p class="ovlabel">Post overview</p>
+      <div id="overview" contenteditable data-ph="A sentence readers see under the title. Optional."></div>
+    </div>
+
+    <div class="toc off" id="toc">
+      <p class="toclabel">Contents</p>
+      <ul id="toclist"></ul>
+    </div>
+
+    <hr class="divider">
+
+    <div id="body" contenteditable
+         data-ph="Write here. Type ## for a heading, ### for a subheading."></div>
+
+    <p class="note" id="note"></p>
+  </div>
+</main>
+
+<script>
+(() => {
+"use strict";
+
+const API = "https://api.telegra.ph";
+const SITE = location.href.replace(/edit\.html.*$/, "");
+
+const $ = id => document.getElementById(id);
+const el = (t, c, x) => {
+  const n = document.createElement(t);
+  if (c) n.className = c;
+  if (x != null) n.textContent = x;
+  return n;
+};
+
+/* The token rides in the fragment, which browsers never send to a server
+   and which is stripped from the Referer header. It is still in this
+   machine's history, which the note at the foot of the page says plainly. */
+const parts = decodeURIComponent(location.hash.replace(/^#/, ""))
+  .split("/").filter(Boolean);
+const token = parts[0] || "";
+let path = parts[1] || "";
+
+let account = null;
+
+async function call(method, params) {
+  const body = new URLSearchParams(params);
+  const res = await fetch(API + "/" + method, { method: "POST", body });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "Telegraph refused that");
+  return data.result;
+}
+
+/* ---------- Telegraph's tag list, and nothing else ---------- */
+
+const KEEP = {
+  B: "b", STRONG: "b", I: "i", EM: "i", U: "u",
+  S: "s", STRIKE: "s", DEL: "s",
+  CODE: "code", PRE: "pre", BLOCKQUOTE: "blockquote", ASIDE: "aside",
+  H1: "h3", H2: "h3", H3: "h3", H4: "h4", H5: "h4", H6: "h4",
+  UL: "ul", OL: "ol", LI: "li", HR: "hr", BR: "br", A: "a",
+  P: "p", DIV: "p", FIGURE: "figure", FIGCAPTION: "figcaption", IMG: "img"
+};
+
+const BLOCK = new Set(["p","h3","h4","blockquote","pre","ul","ol","hr","figure","aside"]);
+
+function toNodes(root) {
+  const out = [];
+  for (const n of root.childNodes) {
+    if (n.nodeType === 3) { if (n.data) out.push(n.data); continue; }
+    if (n.nodeType !== 1) continue;
+
+    const tag = KEEP[n.tagName];
+    if (!tag) { out.push(...toNodes(n)); continue; }   // span, font, anything else
+    if (tag === "br" || tag === "hr") { out.push({ tag }); continue; }
+
+    const node = { tag };
+    if (tag === "a" && n.getAttribute("href")) node.attrs = { href: n.getAttribute("href") };
+    if (tag === "img" && n.getAttribute("src")) node.attrs = { src: n.getAttribute("src") };
+
+    const kids = toNodes(n);
+    if (kids.length) node.children = kids;
+    out.push(node);
+  }
+  return out;
+}
+
+/* Loose inline content at the top level becomes a paragraph. */
+function asBlocks(nodes) {
+  const out = [];
+  let buf = [];
+  const flush = () => {
+    if (buf.some(x => typeof x !== "string" || x.trim())) {
+      out.push({ tag: "p", children: buf });
+    }
+    buf = [];
+  };
+  for (const n of nodes) {
+    if (typeof n !== "string" && BLOCK.has(n.tag)) { flush(); out.push(n); }
+    else buf.push(n);
+  }
+  flush();
+  return out;
+}
+
+const textOf = n =>
+  typeof n === "string" ? n : (n.children || []).map(textOf).join("");
+
+/* ---------- contents, rebuilt as headings appear ---------- */
+
+function syncToc() {
+  const heads = [...$("body").querySelectorAll("h3, h4")];
+  const list = $("toclist");
+  list.replaceChildren();
+
+  for (const h of heads) {
+    const text = h.textContent.trim();
+    if (!text) continue;
+    list.appendChild(el("li", h.tagName === "H4" ? "sub" : null, text));
+  }
+
+  $("toc").classList.toggle("off", list.children.length < 2);
+}
+
+/* ---------- editing ---------- */
+
+const cmd = (name, value) => {
+  document.execCommand(name, false, value || null);
+  $("body").focus();
+  syncToc();
+};
+
+function currentBlock() {
+  let n = document.getSelection().anchorNode;
+  while (n && n !== $("body")) {
+    if (n.nodeType === 1 && /^(P|DIV|H3|H4|BLOCKQUOTE|PRE|LI)$/.test(n.tagName)) return n;
+    n = n.parentNode;
+  }
+  return null;
+}
+
+/* "## " at the start of a line becomes a heading, the same markers the bot
+   understands, so the two ways of writing agree. */
+function autoformat() {
+  const block = currentBlock();
+  if (!block) return;
+
+  const m = /^(#{1,3})\s/.exec(block.textContent);
+  if (!m) return;
+
+  const tag = m[1].length === 3 ? "h4" : "h3";
+  block.textContent = block.textContent.slice(m[0].length);
+  document.execCommand("formatBlock", false, tag);
+
+  const range = document.createRange();
+  range.selectNodeContents(currentBlock() || block);
+  range.collapse(false);
+  const sel = document.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+/* ---------- publish ---------- */
+
+async function publish() {
+  const title = $("title").textContent.trim();
+  if (!title) { say("Give it a title first.", true); $("title").focus(); return; }
+
+  const content = [];
+
+  const cats = $("cats").textContent.trim().replace(/^[,\s]+|[,\s]+$/g, "");
+  if (cats) content.push({ tag: "aside", children: [cats] });
+
+  const overview = asBlocks(toNodes($("overview")));
+  if (overview.length && textOf({ children: overview }).trim()) {
+    content.push({ tag: "blockquote", children: overview.flatMap(b => b.children || []) });
+  }
+
+  const body = asBlocks(toNodes($("body")));
+  if (!body.length) { say("Nothing written yet.", true); $("body").focus(); return; }
+  content.push(...body);
+
+  $("go").disabled = true;
+  say("Publishing…");
+
+  try {
+    const params = {
+      access_token: token,
+      title,
+      content: JSON.stringify(content),
+      author_name: account.author_name || account.short_name || "",
+      author_url: account.author_url || ""
+    };
+    if (path) params.path = path;
+
+    const page = await call(path ? "editPage" : "createPage", params);
+    path = page.path;
+    location.hash = token + "/" + path;
+
+    const link = el("a", null, page.url);
+    link.href = page.url; link.target = "_blank"; link.rel = "noopener";
+    $("note").replaceChildren(
+      el("b", null, path ? "Published. " : "Published. "), link,
+      document.createTextNode(" — publishing again updates this page. "),
+      Object.assign(el("a", null, "Refresh your index"),
+        { href: SITE, target: "_blank", rel: "noopener" }),
+      document.createTextNode(" with /site in Telegram to list it.")
+    );
+  } catch (err) {
+    say(err.message, true);
+  } finally {
+    $("go").disabled = false;
+  }
+}
+
+function say(text, bad) {
+  $("note").replaceChildren(el("span", bad ? "err" : null, text));
+}
+
+/* ---------- start ---------- */
+
+async function start() {
+  if (!/^[A-Za-z0-9_-]{60}$/.test(token)) {
+    $("gate").textContent =
+      "This link is missing its access token. Open the editor from Telepatch in Telegram.";
+    return;
+  }
+
+  try {
+    account = await call("getAccountInfo", {
+      access_token: token,
+      fields: '["short_name","author_name","author_url"]'
+    });
+  } catch (err) {
+    $("gate").innerHTML = "";
+    $("gate").append(el("span", "err", "That token did not work — " + err.message));
+    return;
+  }
+
+  $("who").textContent = account.author_name || account.short_name || "";
+  $("gate").hidden = true;
+  $("sheet").hidden = false;
+  $("tools").hidden = false;
+  $("go").disabled = false;
+
+  if (path) {
+    try {
+      const page = await call("getPage", { path, return_content: "true" });
+      $("title").textContent = page.title || "";
+      const nodes = (page.content || []).slice();
+
+      if (nodes[0] && nodes[0].tag === "aside") {
+        $("cats").textContent = textOf(nodes.shift());
+      }
+      if (nodes[0] && nodes[0].tag === "blockquote") {
+        $("overview").textContent = textOf(nodes.shift());
+      }
+      $("body").innerHTML = "";
+      renderInto(nodes, $("body"));
+      syncToc();
+      say("Editing an existing page. Publishing updates it.");
+    } catch (err) {
+      say("Could not load that page — " + err.message, true);
+      path = "";
+    }
+  } else {
+    say("");
+  }
+
+  const note = el("span", null,
+    "Only Telegraph's formatting is available here, because it is all a " +
+    "Telegraph page can hold. Your access token is in this page's address — " +
+    "it is never sent to a server, but it is in this browser's history.");
+  $("note").appendChild(note);
+}
+
+/* Minimal renderer for loading an existing page back into the editor. */
+function renderInto(nodes, parent) {
+  for (const n of nodes || []) {
+    if (typeof n === "string") { parent.appendChild(document.createTextNode(n)); continue; }
+    if (!n || !n.tag) continue;
+    const tag = BLOCK.has(n.tag) || KEEP[n.tag.toUpperCase()] ? n.tag : "p";
+    const node = document.createElement(tag);
+    if (n.tag === "a" && n.attrs && n.attrs.href) node.href = n.attrs.href;
+    if (n.attrs && n.attrs.src) {
+      node.src = /^https?:/.test(n.attrs.src) ? n.attrs.src : "https://telegra.ph" + n.attrs.src;
+    }
+    renderInto(n.children, node);
+    parent.appendChild(node);
+  }
+}
+
+/* ---------- wiring ---------- */
+
+for (const b of document.querySelectorAll(".tools button")) {
+  b.addEventListener("mousedown", e => e.preventDefault());
+  b.addEventListener("click", () => {
+    if (b.dataset.cmd) return cmd(b.dataset.cmd);
+    if (b.dataset.block) return cmd("formatBlock", b.dataset.block);
+    if (b.hasAttribute("data-link")) {
+      const url = prompt("Link to");
+      if (url) cmd("createLink", url);
+    }
+  });
+}
+
+$("body").addEventListener("input", () => { autoformat(); syncToc(); });
+$("go").addEventListener("click", publish);
+
+// Paste as plain text: pasted markup is the fastest way to smuggle tags
+// Telegraph will only strip.
+for (const id of ["title", "cats", "overview", "body"]) {
+  $(id).addEventListener("paste", e => {
+    e.preventDefault();
+    document.execCommand("insertText", false,
+      (e.clipboardData || window.clipboardData).getData("text/plain"));
+  });
+}
+for (const id of ["title", "cats"]) {
+  $(id).addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); $("body").focus(); }
+  });
+}
+
+start();
+
+})();
+</script>
+</body>
+</html>

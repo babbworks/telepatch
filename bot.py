@@ -61,6 +61,10 @@ SITE_URL = os.environ.get("SITE_URL", "https://babbworks.github.io/telepatch/")
 # so the master post still reads naturally on telegra.ph.
 INDEX_SEP = " — "
 
+# The browser editor. Same origin as the site; the token rides in the
+# fragment, which is never sent to a server and is stripped from Referer.
+EDITOR_URL = SITE_URL.rstrip("/") + "/edit.html"
+
 # A page tagged with this becomes a top-bar link on the site instead of an
 # index entry, and the word itself is hidden when categories are displayed.
 NAV_CATEGORY = "nav"
@@ -910,6 +914,7 @@ async def send_menu(target, token, note=None):
         ],
         [
             InlineKeyboardButton("Upload image", callback_data=f"e:{token}"),
+            InlineKeyboardButton("Write in browser", callback_data=f"W:{token}"),
         ],
         [
             InlineKeyboardButton("Short name", callback_data=f"s:{token}"),
@@ -1038,8 +1043,10 @@ async def prompt_post(message, token, anonymous=False, override=None):
         )
         browser = (
             "\n\nPrefer a real editor? "
-            f'<a href="{info["auth_url"]}">Write in your browser</a> '
-            "(link works for 5 minutes)."
+            f'<a href="{EDITOR_URL}#{token}">Write in the Telepatch editor</a>'
+            ", or the "
+            f'<a href="{info["auth_url"]}">Telegraph one</a> '
+            "(that link works for 5 minutes)."
         )
 
     except Exception:
@@ -1698,6 +1705,27 @@ async def send_pages(target, token):
     )
 
 
+async def send_editor(target, token, path=None):
+    """
+    The Telepatch editor: Telegraph's formatting and nothing else, with the
+    contents list building itself as headings appear.
+    """
+
+    url = f"{EDITOR_URL}#{token}" + (f"/{path}" if path else "")
+
+    await target.reply_text(
+        "<b>Write in your browser</b>\n\n"
+        "Only the formatting Telegraph accepts, an overview line above the "
+        "contents, and the contents list building itself as you add "
+        "headings.\n\n"
+        "The link carries your access token. It is never sent to a server, "
+        "but it will sit in that browser's history - use your own machine.\n\n"
+        f"{url}",
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
 async def send_editor_link(target, token):
     """
     Telegraph refuses uploads from anywhere but its own editor session, so
@@ -2263,6 +2291,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == "g":
         await rebuild_site(query.message, token)
+        return
+
+    if action == "W":
+        await send_editor(query.message, token)
         return
 
     if action == "r":
