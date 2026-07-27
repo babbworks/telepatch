@@ -289,7 +289,13 @@ main{padding-block-end:6rem;min-height:0;flex:1 0 auto}
   color:var(--graphite);
   margin:0 0 .5rem;
 }
-.article .tags{margin:0 0 2rem}
+.article .tags{margin:0 0 1.5rem}
+/* An article's own intro: the first blockquote, lifted out and set as a
+   standfirst rather than left looking like a pull quote in the body. */
+.standfirst{
+  font-size:1.18rem;line-height:1.55;color:var(--graphite);
+  margin:0 0 2rem;max-width:42rem;text-wrap:balance;
+}
 
 /* Contents, built from the h3 and h4 headings Telegraph allows. */
 .toc{
@@ -707,12 +713,18 @@ function scrollToAnchor(slug) {
    as tags under the title, so it is not repeated in the body. */
 function splitAside(content) {
   const nodes = (content || []).slice();
-  let cats = [];
+  let cats = [], intro = null;
+
   if (nodes[0] && nodes[0].tag === "aside") {
     cats = textOf(nodes[0]).split(",").map(s => s.trim()).filter(Boolean);
     nodes.shift();
   }
-  return { cats, nodes };
+
+  // A blockquote at the very top is the article's intro, whether it was
+  // typed as "> " in the bot or set with the quote button in Telegraph.
+  if (nodes[0] && nodes[0].tag === "blockquote") intro = nodes.shift();
+
+  return { cats, intro, nodes };
 }
 
 /* ---------- state ---------- */
@@ -833,7 +845,7 @@ async function showArticle(path) {
   }
 
   document.title = page.title + " · " + masterPage.title;
-  const { cats: tags, nodes } = splitAside(page.content);
+  const { cats: tags, intro, nodes } = splitAside(page.content);
 
   // A nav page is furniture, not a post: no back link, no byline, no views.
   const isPage = navPaths.has(path);
@@ -877,6 +889,12 @@ async function showArticle(path) {
       row.appendChild(b);
     }
     art.appendChild(row);
+  }
+
+  if (intro) {
+    const lead = el("p", "standfirst");
+    renderNodes(intro.children, lead, master);
+    art.appendChild(lead);
   }
 
   const body = el("div", "body");

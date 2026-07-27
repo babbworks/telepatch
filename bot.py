@@ -503,6 +503,56 @@ def as_heading(para):
     return {"tag": tag, "children": children}
 
 
+QUOTE_RE = re.compile(r"^>\s+")
+
+# Block-level tags that must not end up wrapped in a <p>.
+BLOCK_TAGS = {
+    "blockquote", "pre", "aside", "h3", "h4", "ul", "ol", "hr", "figure",
+}
+
+
+def as_quote(para):
+    """
+    A paragraph opening with "> " becomes a blockquote.
+
+    Telegram's own quote formatting already arrives as <blockquote>; this is
+    for people who type the marker instead. A blockquote at the top of an
+    article is read as its intro by the website, so the two authoring routes
+    - the bot and the Telegraph editor - produce the same thing.
+    """
+
+    if not para or not isinstance(para[0], str):
+        return None
+
+    match = QUOTE_RE.match(para[0].lstrip())
+
+    if not match:
+        return None
+
+    first = para[0].lstrip()[match.end():]
+    children = ([first] if first else []) + list(para[1:])
+
+    if not any(not isinstance(c, str) or c.strip() for c in children):
+        return None
+
+    return {"tag": "blockquote", "children": children}
+
+
+def as_block(para):
+    """
+    Let a paragraph that is nothing but one block-level element through
+    unwrapped. Telegram sends quotes and code blocks as real elements, and
+    burying them in a <p> is neither valid nor what Telegraph renders well.
+    """
+
+    real = [n for n in para if not isinstance(n, str) or n.strip()]
+
+    if len(real) != 1 or isinstance(real[0], str):
+        return None
+
+    return real[0] if real[0].get("tag") in BLOCK_TAGS else None
+
+
 def as_media(para):
     """
     Promote a paragraph to a figure when it is just a media URL.
@@ -574,12 +624,39 @@ def to_content(text_html):
         if not any(not isinstance(n, str) or n.strip() for n in para):
             continue
 
+        para = trim(para)
+
         content.append(
-            as_heading(para) or as_media(para)
-            or {"tag": "p", "children": para}
+            as_heading(para) or as_quote(para) or as_media(para)
+            or as_block(para) or {"tag": "p", "children": para}
         )
 
     return content or [{"tag": "p", "children": [""]}]
+
+
+def trim(para):
+    """
+    Drop leading and trailing line breaks and blank strings.
+
+    A stray newline - the blank line after the category line, say - would
+    otherwise leave a <br> at the front of the paragraph, which hides the
+    "#" or ">" marker from the classifiers and renders as an empty line.
+    """
+
+    def spare(node):
+        if isinstance(node, str):
+            return not node.strip()
+        return isinstance(node, dict) and node.get("tag") == "br"
+
+    out = list(para)
+
+    while out and spare(out[0]):
+        out.pop(0)
+
+    while out and spare(out[-1]):
+        out.pop()
+
+    return out
 
 
 def parse_categories(line):
@@ -1053,6 +1130,7 @@ async def howto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         "<code>On the price of tin\n"
         "tin, industry\n\n"
+        "&gt; What the ledgers say, against the usual account.\n\n"
         "The price held steady, then moved sharply.\n\n"
         "## What moved it\n\n"
         "Three things did.</code>\n\n"
@@ -1061,7 +1139,9 @@ async def howto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Bold, italics, underline, strikethrough, links, code and quotes: "
         "type them in Telegram and they carry over.\n"
         "<code>#</code> or <code>##</code> starts a heading, "
-        "<code>###</code> a subheading. Two or more build a contents list.\n\n"
+        "<code>###</code> a subheading. Two or more build a contents list.\n"
+        "A <code>&gt;</code> line right after the categories becomes the "
+        "article's intro, shown under the title.\n\n"
 
         "<b>Pictures and video</b>\n"
         "An image URL alone on a line becomes a picture; words after it "
