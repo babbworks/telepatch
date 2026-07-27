@@ -2073,6 +2073,52 @@ def split_master(content):
     )
 
 
+def read_external(content):
+    """
+    Index entries that are not Telegraph pages, kept verbatim.
+
+    /site regenerates the list from getPageList, which only knows this
+    account's Telegraph pages. A GitHub link added by hand would be wiped
+    on the next rebuild, so it is read back first — the same read-before-
+    write the dates, masthead and footer already need.
+    """
+
+    kept = []
+
+    for node in split_master(content)[1]:
+
+        if not isinstance(node, dict) or node.get("tag") != "ul":
+            continue
+
+        for item in node.get("children", []):
+
+            if not isinstance(item, dict):
+                continue
+
+            kids = item.get("children", [])
+
+            anchor = next(
+                (k for k in kids
+                 if isinstance(k, dict) and k.get("tag") == "a"),
+                None,
+            )
+
+            if not anchor:
+                continue
+
+            href = (anchor.get("attrs") or {}).get("href", "")
+
+            if not href or href.startswith("/") or "telegra.ph" in href:
+                continue
+
+            text = "".join(k for k in kids if isinstance(k, str))
+            found = ISO_DATE.search(text)
+
+            kept.append({"node": item, "date": found.group(0) if found else ""})
+
+    return kept
+
+
 def read_byline(content):
     """
     The byline mode recorded on the marker line, or the default.
@@ -2110,7 +2156,8 @@ def read_footer(content):
 
 
 def build_index(scanned, master_path=None, known_dates=None,
-                masthead=None, footer=None, byline=BYLINE_DEFAULT):
+                masthead=None, footer=None, byline=BYLINE_DEFAULT,
+                external=None):
     """
     Lay the account's articles out as the content of one master post.
 
@@ -2181,7 +2228,12 @@ def build_index(scanned, master_path=None, known_dates=None,
             children.append({"tag": "br"})
             children.append(entry["excerpt"])
 
-        items.append({"tag": "li", "children": children})
+        items.append({"date": entry["date"], "node": {"tag": "li", "children": children}})
+
+    # Hand-added entries pointing elsewhere keep their place by date.
+    items.extend(external or [])
+    items.sort(key=lambda i: i["date"], reverse=True)
+    items = [i["node"] for i in items]
 
     content = list(masthead or [])
 
@@ -2245,7 +2297,8 @@ async def rebuild_site(message, token, master_path=None, title=None):
     footer = read_footer(old)
 
     entries, content = build_index(
-        scanned, master_path, known_dates, masthead, footer, read_byline(old)
+        scanned, master_path, known_dates, masthead, footer,
+        read_byline(old), read_external(old)
     )
 
     byline = info.get("author_name") or info.get("short_name") or ""

@@ -132,6 +132,25 @@ Telegraph has no `deletePage`, so a stray index would be permanent.
 
 A page tagged `nav` becomes a top-bar link instead of an index entry.
 
+### Entries that are not Telegraph pages
+
+An index entry may point at GitHub. A repository link means "the README is
+the content"; a file link means that file. It is fetched when a reader opens
+it, so the article is whatever the repository says today rather than a copy
+taken once — the one thing a Telegraph article cannot be.
+
+```
+How this site is built — 2026-07-27 · code, live
+https://github.com/babbworks/telepatch
+```
+
+`raw.githubusercontent.com` allows cross-origin reads and is not rate
+limited, so this needs no server. GitHub's API is touched only to learn a
+README's filename when it is not `README.md`.
+
+`/site` reads these back before rewriting the list, so a hand-added entry
+survives a rebuild and keeps its place by date.
+
 ### Writing either page by hand
 
 Nothing here is a private format. Everything the website reads is ordinary
@@ -144,6 +163,7 @@ as one published through the bot:
 | Article intro | a `<blockquote>` immediately after it |
 | Article sections | `<h3>` and `<h4>`, which build the contents list |
 | Index entries | links inside the `<ul>`, as `Title — date · N min · categories` |
+| A GitHub entry | a github.com link in that list — the README, read live |
 | Index introduction | any prose above that list |
 | Index footer | any prose below it |
 | Byline mode | `byline=` on the marker line |

@@ -462,25 +462,26 @@ const el = (tag, cls, text) => {
    #master/article     one article, with the same bar and footer around it */
 
 function route() {
-  let h = decodeURIComponent(location.hash.replace(/^#/, "")).trim();
+  let h = location.hash.replace(/^#/, "").trim();
   h = h.split("?")[0].replace(/^https?:\/\/telegra\.ph\//i, "");
   h = h.replace(/^\/+|\/+$/g, "");
   if (!h) return {};
-  const parts = h.split("/").filter(Boolean);
-  return {
-    master: parts[0],
-    article: parts[1] || null,
-    anchor: parts[2] || null
-  };
+
+  // Decoded per segment, not all at once: a resource id like
+  // gh:owner/repo/docs/x.md contains slashes of its own.
+  const parts = h.split("/").map(part => {
+    try { return decodeURIComponent(part); } catch (err) { return part; }
+  }).filter(Boolean);
+
+  return { master: parts[0], article: parts[1] || null, anchor: parts[2] || null };
 }
 
 /* A heading is a third path segment rather than a normal "#id" fragment,
    because the fragment is already carrying the route. This way a link to a
    section is a real, shareable URL instead of a scroll side effect. */
 const link = (master, article, anchor) =>
-  "#" + master +
-  (article ? "/" + article : "") +
-  (anchor ? "/" + anchor : "");
+  "#" + [master, article, anchor].filter(Boolean)
+    .map(encodeURIComponent).join("/");
 
 /* ---------- Telegraph helpers ---------- */
 
@@ -525,6 +526,55 @@ function internalPath(href) {
   return rest.split(/[?#]/)[0];
 }
 
+/* ---------- GitHub as a second kind of resource ----------
+
+   A repository link means "the README is the content", which is the
+   convention GitHub itself uses. A file link means that file. Either way
+   it is fetched when the reader opens it, so the article is whatever the
+   repository says today rather than a copy taken once.
+
+   raw.githubusercontent.com sends access-control-allow-origin:* and is not
+   rate limited, so this stays serverless. The API is touched only to learn
+   a README's filename when it is not README.md, and that is 60/hour. */
+
+const GH_PAGE = /^https?:\/\/(?:www\.)?github\.com\/([^/\s]+)\/([^/\s#?]+?)(?:\.git)?(?:\/(?:blob|tree)\/[^/]+\/(.+?))?\/?$/i;
+const GH_RAW = /^https?:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/[^/]+\/(.+)$/i;
+
+function ghResource(url) {
+  const raw = GH_RAW.exec(url);
+  if (raw) return "gh:" + raw[1] + "/" + raw[2] + "/" + raw[3];
+  const page = GH_PAGE.exec(url);
+  if (!page) return null;
+  return "gh:" + page[1] + "/" + page[2] + (page[3] ? "/" + page[3] : "");
+}
+
+const isGh = path => typeof path === "string" && path.startsWith("gh:");
+
+async function ghFetch(resource) {
+  const [owner, repo, ...rest] = resource.slice(3).split("/");
+  const file = rest.join("/");
+  const raw = name =>
+    "https://raw.githubusercontent.com/" + owner + "/" + repo + "/HEAD/" + name;
+
+  if (file) {
+    const res = await fetch(raw(file));
+    if (!res.ok) throw new Error("that file is not in the repository");
+    return { text: await res.text(), name: file, owner, repo };
+  }
+
+  let res = await fetch(raw("README.md"));
+  if (res.ok) return { text: await res.text(), name: "README.md", owner, repo };
+
+  // Not README.md — ask GitHub what it is actually called.
+  const meta = await fetch("https://api.github.com/repos/" + owner + "/" + repo + "/readme");
+  if (!meta.ok) throw new Error("no README in that repository");
+  const info = await meta.json();
+
+  res = await fetch(raw(info.name));
+  if (!res.ok) throw new Error("no README in that repository");
+  return { text: await res.text(), name: info.name, owner, repo };
+}
+
 /* ---------- master post parsing ---------- */
 
 const textOf = n =>
@@ -566,7 +616,7 @@ function toEntry(href, title, meta, excerpt) {
   return {
     title: (title || "").trim() || href,
     url,
-    path: internalPath(href),
+    path: internalPath(href) || ghResource(url),
     date,
     minutes,
     excerpt: (excerpt || "").trim(),
@@ -650,6 +700,137 @@ function parseMaster(content) {
     byline,
     entries: collect(nodes[cut].children, [])
   };
+}
+
+/* ---------- Markdown ----------
+
+   Only what a Telegraph page could hold anyway, built as real elements so
+   nothing from a repository is ever interpreted as markup. A README with a
+   <script> in it arrives here as text and leaves as text. */
+
+const MD_INLINE = new RegExp(
+  "`([^`]+)`" +                                  // code
+  "|!\\[([^\\]]*)\\]\\(\\s*([^)\\s]+)[^)]*\\)" +      // image
+  "|\\[([^\\]]*)\\]\\(\\s*([^)\\s]+)[^)]*\\)" +       // link
+  "|\\*\\*([^*]+)\\*\\*|__([^_]+)__" +               // strong
+  "|\\*([^*]+)\\*|_([^_]+)_", "g");                  // emphasis
+
+function mdUrl(raw, base) {
+  const value = String(raw == null ? "" : raw).trim();
+  if (!value || value.startsWith("#")) return "";
+  if (/^(?:https?:|mailto:)/i.test(value)) return value;
+  if (/^[a-z][a-z0-9+.\-]*:/i.test(value)) return "";
+  try { return new URL(value, base).href; } catch (err) { return ""; }
+}
+
+function mdInline(text, parent, base) {
+  MD_INLINE.lastIndex = 0;
+  let at = 0, m;
+
+  while ((m = MD_INLINE.exec(text))) {
+    if (m.index > at) parent.append(text.slice(at, m.index));
+
+    if (m[1] != null) parent.appendChild(el("code", null, m[1]));
+
+    else if (m[3] != null) {
+      const src = mdUrl(m[3], base);
+      if (src) {
+        const img = document.createElement("img");
+        img.src = src; img.alt = m[2] || ""; img.loading = "lazy";
+        parent.appendChild(img);
+      } else parent.append(m[2] || "");
+    }
+
+    else if (m[5] != null) {
+      const href = mdUrl(m[5], base);
+      if (href) {
+        const a = el("a", null, m[4] || m[5]);
+        a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer";
+        parent.appendChild(a);
+      } else parent.append(m[4] || "");
+    }
+
+    else if (m[6] != null || m[7] != null)
+      parent.appendChild(el("b", null, m[6] != null ? m[6] : m[7]));
+
+    else if (m[8] != null || m[9] != null)
+      parent.appendChild(el("i", null, m[8] != null ? m[8] : m[9]));
+
+    at = m.index + m[0].length;
+  }
+
+  if (at < text.length) parent.append(text.slice(at));
+}
+
+function renderMarkdown(src, parent, base) {
+  const lines = String(src).replace(/\r\n?/g, "\n").split("\n");
+  let i = 0;
+
+  const para = buf => {
+    if (!buf.length) return;
+    const p = el("p");
+    mdInline(buf.join(" "), p, base);
+    parent.appendChild(p);
+  };
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (!line.trim()) { i++; continue; }
+
+    if (/^```/.test(line)) {
+      const buf = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]);
+      i++;
+      parent.appendChild(el("pre", null, buf.join("\n")));
+      continue;
+    }
+
+    const head = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (head) {
+      const h = el(head[1].length <= 2 ? "h3" : "h4");
+      mdInline(head[2].replace(/\s+#+\s*$/, ""), h, base);
+      parent.appendChild(h);
+      i++;
+      continue;
+    }
+
+    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      parent.appendChild(el("hr")); i++; continue;
+    }
+
+    if (/^\s*>\s?/.test(line)) {
+      const buf = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+        buf.push(lines[i++].replace(/^\s*>\s?/, ""));
+      }
+      const q = el("blockquote");
+      renderMarkdown(buf.join("\n"), q, base);
+      parent.appendChild(q);
+      continue;
+    }
+
+    const bullet = /^\s*(?:[-*+]|\d+[.)])\s+/;
+    if (bullet.test(line)) {
+      const ordered = /^\s*\d/.test(line);
+      const list = el(ordered ? "ol" : "ul");
+      while (i < lines.length && bullet.test(lines[i])) {
+        const li = el("li");
+        mdInline(lines[i++].replace(bullet, ""), li, base);
+        list.appendChild(li);
+      }
+      parent.appendChild(list);
+      continue;
+    }
+
+    const buf = [];
+    while (i < lines.length && lines[i].trim() &&
+           !/^(?:```|#{1,6}\s|\s*>|\s*(?:[-*+]|\d+[.)])\s)/.test(lines[i])) {
+      buf.push(lines[i++].trim());
+    }
+    para(buf);
+  }
 }
 
 /* ---------- article rendering ----------
@@ -872,6 +1053,7 @@ function paint() {
 }
 
 async function showArticle(path) {
+  if (isGh(path)) return showGithub(path);
   syncMeta();
   const view = $("view");
   view.replaceChildren(el("p", "loading", "fetching " + path + "…"));
@@ -1042,6 +1224,98 @@ async function sharePage(title, btn) {
     if (err && err.name === "AbortError") return;
     flash(btn, "Copy the address bar");
   }
+}
+
+/* A GitHub article, fetched at read time. Everything around it — the bar,
+   the contents, the pager, the footer — is the same as a Telegraph one;
+   only where the words came from differs. */
+async function showGithub(resource) {
+  syncMeta();
+  const view = $("view");
+  view.replaceChildren(el("p", "loading", "fetching " + resource.slice(3) + "…"));
+
+  const entry = posts.find(e => e.path === resource) ||
+                navItems.find(e => e.path === resource);
+
+  let doc;
+  try {
+    if (cache.has(resource)) doc = cache.get(resource);
+    else { doc = await ghFetch(resource); cache.set(resource, doc); }
+  } catch (err) {
+    view.replaceChildren();
+    view.appendChild(backLink());
+    view.appendChild(el("p", "empty", "Could not read that repository — " + err.message));
+    return;
+  }
+
+  const isPage = navPaths.has(resource);
+  const title = (entry && entry.title) || doc.repo;
+  document.title = title + " · " + masterPage.title;
+
+  view.replaceChildren();
+  if (!isPage) view.appendChild(backLink());
+
+  const art = el("article", "article" + (isPage ? " bare" : ""));
+  art.appendChild(el("h1", null, title));
+
+  if (!isPage) {
+    const line = el("p", "byline");
+    const src = el("a", null, doc.owner + "/" + doc.repo);
+    src.href = "https://github.com/" + doc.owner + "/" + doc.repo;
+    src.target = "_blank"; src.rel = "noopener noreferrer";
+
+    const parts = [src, "live"];
+    if (entry && entry.date) parts.push(fmtDate(entry.date));
+
+    const share = el("button", "share", "Share");
+    share.type = "button";
+    share.addEventListener("click", () => sharePage(title, share));
+    parts.push(share);
+
+    parts.forEach((part, i) => {
+      if (i) line.append(" · ");
+      if (typeof part === "string") line.append(part);
+      else line.appendChild(part);
+    });
+    art.appendChild(line);
+  }
+
+  const tags = entry ? shown(entry) : [];
+  if (tags.length) {
+    const row = el("div", "tags");
+    for (const c of tags) {
+      const b = el("button", "tag", c);
+      b.type = "button";
+      b.addEventListener("click", () => { active = c.toLowerCase(); location.hash = link(master); });
+      row.appendChild(b);
+    }
+    art.appendChild(row);
+  }
+
+  const body = el("div", "body");
+  const base = "https://raw.githubusercontent.com/" + doc.owner + "/" + doc.repo + "/HEAD/";
+  renderMarkdown(doc.text, body, base);
+
+  const toc = buildToc(body, resource);
+  if (toc) art.appendChild(toc);
+  art.appendChild(body);
+
+  const origin = el("p", "origin");
+  const a = el("a", null, "github.com");
+  a.href = "https://github.com/" + doc.owner + "/" + doc.repo +
+           (doc.name ? "/blob/HEAD/" + doc.name : "");
+  a.target = "_blank"; a.rel = "noopener noreferrer";
+  origin.append("read live from ", a, " — this page shows whatever the repository says now.");
+  art.appendChild(origin);
+
+  view.appendChild(art);
+  currentArticle = resource;
+
+  const wanted = route().anchor;
+  if (wanted) scrollToAnchor(wanted); else scrollTo(0, 0);
+
+  syncBar();
+  checkAlign();
 }
 
 function backLink() {
