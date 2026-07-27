@@ -323,6 +323,10 @@ footer{
 }
 footer p{margin:0 0 .4rem}
 footer a{color:var(--graphite)}
+/* Each sentence wraps as one unit. They sit on a single line when there is
+   room and stack into three when there is not. */
+footer .fpart{display:inline-block;margin-right:.4rem}
+footer .fpart:last-child{margin-right:0}
 
 /* The gutter offset only fits once the viewport clears the column plus
    both margins; below that it would push the page sideways. */
@@ -905,11 +909,19 @@ function buildFooter() {
     return a;
   };
 
+  // Three inline-blocks rather than one run of text: each wraps as a whole
+  // unit, so a narrow screen breaks between sentences and never inside one.
+  const part = (...bits) => {
+    const s = el("span", "fpart");
+    s.append(...bits);
+    return s;
+  };
+
   p.append(
-    "Site ", word, " with ", link("Telepatch", SOURCE),
-    " using ", link("@telepatchbot", BOT),
-    ". All content published via ", link("telegraph", TELEGRAPH_API),
-    ". - ", link("index page", masterPage.url)
+    part("Site ", word, " with ", link("Telepatch", SOURCE),
+         " using ", link("@telepatchbot", BOT), "."),
+    part("All content published via ", link("telegraph", TELEGRAPH_API), "."),
+    part(link("index page", masterPage.url))
   );
 
   f.appendChild(p);
