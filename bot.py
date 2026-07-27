@@ -84,6 +84,10 @@ RETIRED_MARK = "Retired Telepatch index."
 
 INDEX_MARKS = (MASTER_MARK, RETIRED_MARK)
 
+# Stands in for the list when an account has nothing published. Named so the
+# masthead reader can tell it apart from the publisher's own prose.
+EMPTY_NOTICE = "Nothing published yet."
+
 
 # Carrier URL for the hidden token in ForceReply prompts. Never visited -
 # it exists only so the token rides along as a message entity.
@@ -976,7 +980,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/views &lt;url&gt; - title, byline and views for any Telegraph page\n\n"
 
         "/privacy - what this bot keeps (nothing)\n"
-        "/about - about Telepatch",
+        "/about - set your site's introduction\n"
+        "/telepatch - about Telepatch",
 
         parse_mode=ParseMode.HTML,
     )
@@ -1095,6 +1100,97 @@ async def new(update: Update, context: ContextTypes.DEFAULT_TYPE):
             selective=True,
             input_field_placeholder="short name, author, url",
         ),
+    )
+
+
+async def about_site(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Set the introduction that appears above the index on your site.
+
+    Replying to the pinned Site message supplies both the token and the
+    index path for free; otherwise the index has to be hunted for.
+    """
+
+    token = token_for(update, context)
+
+    if not token:
+        await update.message.reply_text(
+            token_hint("/about"),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    _, _, extras = read_carrier(update.message)
+
+    path = extras.get("site")
+
+    if not path:
+        notice = await update.message.reply_text("Finding your index…")
+        scanned = await asyncio.to_thread(scan_pages, token)
+        path, _ = pick_master(scanned)
+        await notice.delete()
+
+    if not path:
+        await update.message.reply_text(
+            "You have no index yet. Run /site first, then /about."
+        )
+        return
+
+    await update.message.reply_text(
+        "Reply with the introduction for your site.\n\n"
+        "It appears under the title, above your list of posts. "
+        "Bold, italics and links are kept.\n\n"
+        "Send <code>-</code> to remove it."
+        + carrier_link("about", token, site=path),
+        parse_mode=ParseMode.HTML,
+        reply_markup=ForceReply(
+            selective=True,
+            input_field_placeholder="a sentence or two",
+        ),
+    )
+
+
+async def set_masthead(message, token, path):
+    """
+    Replace the introduction, leaving the generated list untouched. Splicing
+    rather than rebuilding keeps this to two requests instead of hundreds.
+    """
+
+    try:
+        page = telegraph("getPage", path=path, return_content="true")
+
+    except Exception as error:
+        await message.reply_text(f"Could not find your index:\n{error}")
+        return
+
+    text = message.text.strip()
+
+    masthead = [] if is_clear(text) else to_content(message.text_html or text)
+
+    _, rest = split_masthead(page.get("content"))
+
+    try:
+        telegraph(
+            "editPage",
+            access_token=token,
+            path=path,
+            title=page["title"],
+            content=json.dumps(masthead + rest),
+            author_name=page.get("author_name") or "",
+            author_url=page.get("author_url") or "",
+        )
+
+    except Exception as error:
+        await message.reply_text(f"Could not save it:\n{error}")
+        return
+
+    await message.reply_text(
+        ("Introduction removed." if not masthead else "Introduction saved.")
+        + f"\n\n{SITE_URL}#{path}\n\n"
+        "Reply to this message with /about to change it again."
+        + carrier_link("page", token, site=path),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
     )
 
 
@@ -1577,7 +1673,57 @@ def pick_master(scanned):
     return None, None
 
 
-def build_index(scanned, master_path=None, known_dates=None):
+def read_masthead(content):
+    """
+    The publisher's own prose from the top of the master post.
+
+    /site regenerates the whole page, so an introduction typed by hand would
+    vanish on the next rebuild unless it is read back first. Same principle
+    as the dates: the master post is the record, and the bot remembers
+    nothing between runs.
+    """
+
+    masthead = []
+
+    for node in content or []:
+
+        if not isinstance(node, dict):
+            continue
+
+        if node.get("tag") == "ul":
+            break
+
+        text = node_text(node).strip()
+
+        if any(mark in text for mark in INDEX_MARKS):
+            break
+
+        if text == EMPTY_NOTICE:
+            continue
+
+        masthead.append(node)
+
+    return masthead
+
+
+def split_masthead(content):
+    """
+    Return (masthead, rest) where rest begins at the index list. Used when
+    replacing the introduction without regenerating the list.
+    """
+
+    for i, node in enumerate(content or []):
+
+        if not isinstance(node, dict):
+            continue
+
+        if node.get("tag") == "ul" or node_text(node).strip() == EMPTY_NOTICE:
+            return content[:i], content[i:]
+
+    return list(content or []), []
+
+
+def build_index(scanned, master_path=None, known_dates=None, masthead=None):
     """
     Lay the account's articles out as the content of one master post.
 
@@ -1650,9 +1796,12 @@ def build_index(scanned, master_path=None, known_dates=None):
 
         items.append({"tag": "li", "children": children})
 
-    content = [{"tag": "ul", "children": items}] if items else [
-        {"tag": "p", "children": ["Nothing published yet."]}
-    ]
+    content = list(masthead or [])
+
+    content.append(
+        {"tag": "ul", "children": items} if items
+        else {"tag": "p", "children": [EMPTY_NOTICE]}
+    )
 
     content.append({"tag": "p", "children": [MASTER_MARK]})
 
@@ -1699,12 +1848,14 @@ async def rebuild_site(message, token, master_path=None, title=None):
         title or existing_title or info.get("short_name") or "Telepatch"
     )
 
-    # Read the dates already recorded before overwriting the page they live on.
-    known_dates = read_index_dates(
-        next((c for p, c in scanned if p["path"] == master_path), None)
-    )
+    # Read what the old page recorded before overwriting it: the dates, and
+    # any introduction the publisher wrote above the list.
+    old = next((c for p, c in scanned if p["path"] == master_path), None)
 
-    entries, content = build_index(scanned, master_path, known_dates)
+    known_dates = read_index_dates(old)
+    masthead = read_masthead(old)
+
+    entries, content = build_index(scanned, master_path, known_dates, masthead)
 
     byline = info.get("author_name") or info.get("short_name") or ""
 
@@ -1914,6 +2065,10 @@ async def on_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await revise_page(update.message, token, extras.get("path", ""))
         return
 
+    if field == "about":
+        await set_masthead(update.message, token, extras.get("site", ""))
+        return
+
     if field in ("post", "anon"):
 
         override = ("n" in extras) and (extras.get("n", ""), extras.get("u", ""))
@@ -1977,10 +2132,11 @@ async def register_commands(app):
         ("pages", "List your pages - reply to your pinned identity"),
         ("revise", "Rewrite a post - reply to its Published message"),
         ("site", "Build or refresh your public index"),
+        ("about", "Set the introduction on your site"),
         ("manage", "Byline, URL, revoke - reply to your pinned identity"),
         ("views", "Views for any page: /views <url>"),
         ("privacy", "What this bot keeps (nothing)"),
-        ("about", "About Telepatch"),
+        ("telepatch", "About Telepatch"),
     ])
 
 
@@ -2000,14 +2156,15 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("about", about))
     app.add_handler(CommandHandler("privacy", privacy))
+    app.add_handler(CommandHandler("telepatch", about))
     app.add_handler(CommandHandler("new", new))
     app.add_handler(CommandHandler("manage", manage))
     app.add_handler(CommandHandler("post", post))
     app.add_handler(CommandHandler("pages", pages))
     app.add_handler(CommandHandler("revise", revise))
     app.add_handler(CommandHandler("site", site))
+    app.add_handler(CommandHandler("about", about_site))
     app.add_handler(CommandHandler("views", views))
 
     app.add_handler(CallbackQueryHandler(on_button))
