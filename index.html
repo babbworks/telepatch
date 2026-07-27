@@ -1,25 +1,926 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Telepatch</title>
+<meta name="description" content="A publication assembled from a single Telegraph page. No server, no database.">
+<style>
+/* ---------------------------------------------------------------
+   Telepatch — telephone-exchange palette. Enamelled steel, bakelite
+   ink, patch-cord green, and one indicator lamp used only for live
+   and active states. System fonts only: the site makes zero
+   third-party requests, which is the point.
+----------------------------------------------------------------*/
+:root{
+  --paper:#E8EAE6;
+  --panel:#DEE1DC;
+  --ink:#14181A;
+  --graphite:#5C6562;
+  --hair:#C6CAC4;
+  --patch:#1C5A4E;
+  --lamp:#C4342A;
 
-    <title>Telepatch</title>
+  --serif:Georgia,"Iowan Old Style","Palatino Linotype",Palatino,serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
 
-    <link rel="stylesheet" href="style.css">
+  --col:52rem;
+  --pad:1.5rem;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --paper:#0F1211; --panel:#171B1A; --ink:#DDE0DC; --graphite:#8A938F;
+    --hair:#2A302E; --patch:#6FBFA8; --lamp:#E46659;
+  }
+}
+*{box-sizing:border-box}
+html{
+  -webkit-text-size-adjust:100%;
+  /* Reserve the scrollbar track always, or the centred column shifts
+     sideways every time page height crosses the scrolling threshold: a
+     short nav page against a long index, or the narration collapsing.
+     overflow-y works everywhere; scrollbar-gutter is the tidier modern
+     form and wins where it is supported. */
+  overflow-y:scroll;
+  scrollbar-gutter:stable;
+}
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--serif);
+  font-size:17px;
+  line-height:1.6;
+  /* Footer sits at the bottom of the viewport when a page is short, and
+     flows normally when it is not. */
+  display:flex;flex-direction:column;
+  min-height:100vh;min-height:100dvh;
+}
+a{color:var(--patch)}
+:focus-visible{outline:2px solid var(--lamp);outline-offset:3px}
+
+/* THE column. Every element carrying .col resolves to an identical inline
+   box, so the site title in the bar and the content below it share one left
+   edge. Logical longhands only - a `padding` shorthand here would outrank
+   the element-selector rules further down and silently zero their vertical
+   padding, which is exactly what used to happen. Nothing else in this
+   stylesheet may set padding-inline or margin-inline on a .col element. */
+.col{
+  width:min(100%,var(--col));
+  margin-inline:auto;
+  padding-inline:var(--pad);
+}
+
+/* ---- sticky bar: exactly one row of text tall ---- */
+.bar{
+  position:sticky;top:0;z-index:20;
+  background:var(--paper);
+  border-bottom:1px solid var(--hair);
+}
+.bar .col{
+  display:flex;align-items:baseline;gap:1.25rem;
+  padding-block:.6rem;
+  position:relative;
+}
+.brand{
+  font-family:var(--serif);
+  font-size:1rem;font-weight:700;letter-spacing:-.01em;
+  color:var(--ink);text-decoration:none;
+  flex:0 1 auto;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.pages{display:flex;gap:1rem;flex:1;min-width:0}
+.pages a{
+  font-family:var(--sans);font-size:.8rem;
+  text-decoration:none;white-space:nowrap;
+}
+.pages a:hover{text-decoration:underline}
+.catbtn{
+  margin-left:auto;
+  font-family:var(--mono);font-size:.7rem;
+  text-transform:uppercase;letter-spacing:.08em;
+  background:none;border:0;padding:0;cursor:pointer;
+  color:var(--graphite);white-space:nowrap;
+}
+.catbtn[aria-expanded="true"],.catbtn.on{color:var(--lamp)}
+
+/* drops into the right gutter, past the column edge where there's room */
+.drop{
+  position:absolute;top:100%;right:var(--pad);
+  margin-right:-9rem;
+  width:15rem;max-width:calc(100vw - 2rem);
+  background:var(--panel);
+  border:1px solid var(--hair);
+  padding:.75rem 0;
+  display:none;
+  max-height:70vh;overflow-y:auto;
+}
+.drop.open{display:block}
+.drop h2{
+  font-family:var(--mono);font-size:.65rem;font-weight:400;
+  text-transform:uppercase;letter-spacing:.1em;
+  color:var(--graphite);margin:.5rem 0 .35rem;padding:0 .9rem;
+}
+.drop h2:first-child{margin-top:0}
+.drop button,.drop a{
+  display:flex;justify-content:space-between;gap:1rem;width:100%;
+  font-family:var(--sans);font-size:.85rem;text-align:left;
+  background:none;border:0;cursor:pointer;
+  padding:.3rem .9rem;color:var(--ink);text-decoration:none;
+}
+.drop button:hover,.drop a:hover{background:var(--paper)}
+.drop button.on{color:var(--lamp)}
+.drop .n{font-family:var(--mono);font-size:.7rem;color:var(--graphite)}
+.drop .inpanel{display:none}
+
+/* ---- narration: the page reporting its own assembly ---- */
+.boot{
+  font-family:var(--mono);font-size:.75rem;line-height:1.9;
+  color:var(--graphite);
+  margin:2.5rem 0 0;white-space:pre-wrap;word-break:break-word;
+}
+.boot .err{color:var(--lamp)}
+.boot::after{
+  content:"";display:inline-block;
+  width:.5em;height:1em;margin-left:.15em;
+  background:var(--lamp);vertical-align:-.15em;
+  animation:blink 1s steps(1) infinite;
+}
+.boot.done::after{display:none}
+@keyframes blink{50%{opacity:0}}
+.boot.done{
+  opacity:.45;font-size:.68rem;line-height:1.7;
+  margin-bottom:2rem;overflow:hidden;
+  transition:opacity .6s ease,font-size .5s ease,
+             max-height .6s ease,margin .6s ease;
+}
+/* Retires itself once read. The masthead animates between the narration's
+   height and the author line's, so the two swap in one continuous move
+   instead of collapsing to nothing and then shoving content back down. */
+.boot.fade{opacity:0}
+
+#masthead{overflow:hidden;transition:max-height .6s ease}
+
+.sitemeta{
+  font-family:var(--mono);font-size:.7rem;
+  text-transform:uppercase;letter-spacing:.09em;
+  color:var(--graphite);
+  margin:2.5rem 0 2rem;
+  opacity:0;transition:opacity .5s ease .15s;
+}
+.sitemeta.in{opacity:1}
+
+main{padding-block-end:6rem;min-height:0;flex:1 0 auto}
+
+/* ---- index ---- */
+.tools{
+  display:flex;align-items:baseline;gap:1rem;
+  margin:0 0 2rem;padding-bottom:.6rem;
+  border-bottom:1px solid var(--hair);
+}
+.search{
+  flex:1;min-width:0;
+  font-family:var(--serif);font-size:1rem;color:var(--ink);
+  background:none;border:0;padding:0;
+}
+.search::placeholder{color:var(--graphite)}
+.count{font-family:var(--mono);font-size:.7rem;color:var(--graphite);white-space:nowrap}
+
+.index{list-style:none;margin:0;padding:0}
+.item{padding:1.15rem 0;border-bottom:1px solid var(--hair)}
+.item a{
+  display:block;font-size:1.3rem;line-height:1.3;
+  color:var(--ink);text-decoration:none;text-wrap:balance;
+}
+.item a:hover{color:var(--patch)}
+.tags{margin-top:.4rem;display:flex;flex-wrap:wrap;gap:.6rem}
+.tag{
+  font-family:var(--mono);font-size:.68rem;
+  text-transform:uppercase;letter-spacing:.07em;
+  background:none;border:0;padding:0;cursor:pointer;
+  color:var(--graphite);
+}
+.tag:hover{color:var(--patch)}
+.tag.on{color:var(--lamp)}
+
+.empty{font-family:var(--sans);font-size:.9rem;color:var(--graphite);padding:2rem 0}
+
+/* ---- article, rendered here rather than sent away ---- */
+.back{
+  display:inline-block;margin:2.5rem 0 1.25rem;
+  font-family:var(--mono);font-size:.7rem;
+  text-transform:uppercase;letter-spacing:.08em;
+  text-decoration:none;
+}
+.back:hover{color:var(--lamp)}
+/* A nav page has no back link above it, so it carries its own top space
+   rather than hugging the sticky bar. */
+.article.bare{margin-top:3.25rem}
+.article h1{
+  font-size:2.3rem;line-height:1.12;letter-spacing:-.015em;
+  margin:0 0 .6rem;text-wrap:balance;
+}
+.byline{
+  font-family:var(--mono);font-size:.7rem;
+  text-transform:uppercase;letter-spacing:.08em;
+  color:var(--graphite);
+  margin:0 0 .5rem;
+}
+.article .tags{margin:0 0 2rem}
+.body{font-size:1.06rem;line-height:1.72}
+.body p{margin:0 0 1.25rem}
+.body h3{font-size:1.45rem;line-height:1.25;margin:2.4rem 0 .7rem}
+.body h4{font-size:1.12rem;margin:2rem 0 .5rem}
+.body ul,.body ol{margin:0 0 1.25rem;padding-left:1.4rem}
+.body li{margin:.3rem 0}
+.body blockquote{
+  margin:1.6rem 0;padding-left:1.2rem;
+  border-left:2px solid var(--hair);color:var(--graphite);
+}
+.body aside{
+  margin:2rem 0;text-align:center;font-style:italic;color:var(--graphite);
+}
+.body figure{margin:2.2rem 0;text-align:center}
+.body img,.body video{max-width:100%;height:auto;display:block;margin:0 auto}
+.body iframe{width:100%;aspect-ratio:16/9;border:0;display:block}
+.body figcaption{
+  font-family:var(--sans);font-size:.8rem;color:var(--graphite);
+  margin-top:.6rem;
+}
+.body pre{
+  background:var(--panel);padding:1rem;overflow-x:auto;
+  font-family:var(--mono);font-size:.82rem;line-height:1.55;
+}
+.body code{font-family:var(--mono);font-size:.9em;background:var(--panel);padding:.1em .3em}
+.body pre code{background:none;padding:0}
+.body hr{border:0;border-top:1px solid var(--hair);margin:2.6rem 0}
+.body a{overflow-wrap:anywhere}
+.origin{
+  margin:3.5rem 0 0;padding-top:1.2rem;border-top:1px solid var(--hair);
+  font-family:var(--sans);font-size:.8rem;color:var(--graphite);
+}
+.loading{font-family:var(--mono);font-size:.75rem;color:var(--graphite);margin:2.5rem 0}
+
+/* ---- landing, when no publication is named ---- */
+.intro h1{
+  font-size:2.6rem;line-height:1.05;letter-spacing:-.02em;
+  margin:3rem 0 1rem;text-wrap:balance;
+}
+.intro p{margin:0 0 1.1rem;max-width:34rem}
+.intro .lead{font-size:1.15rem}
+.intro code{font-family:var(--mono);font-size:.85em;background:var(--panel);padding:.12em .4em}
+.steps{list-style:none;margin:2rem 0;padding:0;border-top:1px solid var(--hair)}
+.steps li{
+  display:grid;grid-template-columns:5.5rem 1fr;gap:1rem;
+  padding:.9rem 0;border-bottom:1px solid var(--hair);
+}
+.steps code{background:none;padding:0;color:var(--patch)}
+.steps span{font-family:var(--sans);font-size:.92rem}
+
+footer{
+  flex:0 0 auto;
+  border-top:1px solid var(--hair);
+  margin-top:4rem;
+  padding-block:1.6rem 3rem;
+  font-family:var(--sans);font-size:.75rem;color:var(--graphite);
+}
+footer p{margin:0 0 .4rem}
+footer a{color:var(--graphite)}
+
+/* The gutter offset only fits once the viewport clears the column plus
+   both margins; below that it would push the page sideways. */
+@media (max-width:62rem){ .drop{margin-right:0} }
+@media (max-width:34rem){
+  :root{--pad:1.1rem}
+  .pages{display:none}
+  .drop .inpanel{display:block}
+  .intro h1{font-size:2rem}
+  .item a{font-size:1.15rem}
+  .article h1{font-size:1.75rem}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important}
+}
+</style>
 </head>
-
 <body>
 
-<main>
-    <h1>Telepatch</h1>
+<nav class="bar" hidden id="bar">
+  <div class="col">
+    <a class="brand" id="brand" href="./">Telepatch</a>
+    <span class="pages" id="pages"></span>
+    <button class="catbtn" id="catbtn" aria-expanded="false" aria-controls="drop">Categories</button>
+    <div class="drop" id="drop"></div>
+  </div>
+</nav>
 
-    <div id="app">
-        Loading...
-    </div>
+<main class="col" id="main">
+  <div id="masthead">
+    <pre class="boot" id="boot" aria-live="polite"></pre>
+    <p class="sitemeta" id="sitemeta" hidden></p>
+  </div>
+  <div id="view"></div>
 </main>
 
-<script src="app.js"></script>
+<footer class="col" id="foot" hidden></footer>
 
+<script>
+(() => {
+"use strict";
+
+const API = "https://api.telegra.ph";
+const HOST = "https://telegra.ph";
+const SOURCE = "https://github.com/babbworks/telepatch";
+const BOT = "https://t.me/telepatchbot";
+
+const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const wait = ms => new Promise(r => setTimeout(r, REDUCED ? 0 : ms));
+
+const $ = id => document.getElementById(id);
+const el = (tag, cls, text) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+};
+
+/* ---------- routing ----------
+   #master             the index
+   #master/article     one article, with the same bar and footer around it */
+
+function route() {
+  let h = decodeURIComponent(location.hash.replace(/^#/, "")).trim();
+  h = h.split("?")[0].replace(/^https?:\/\/telegra\.ph\//i, "");
+  h = h.replace(/^\/+|\/+$/g, "");
+  if (!h) return {};
+  const parts = h.split("/").filter(Boolean);
+  return { master: parts[0], article: parts[1] || null };
+}
+
+const link = (master, article) =>
+  "#" + master + (article ? "/" + article : "");
+
+/* ---------- Telegraph helpers ---------- */
+
+const cache = new Map();
+
+async function getPage(path) {
+  if (cache.has(path)) return cache.get(path);
+  const res = await fetch(
+    API + "/getPage?return_content=true&path=" + encodeURIComponent(path)
+  );
+  const raw = await res.text();
+  const data = JSON.parse(raw);
+  if (!data.ok) throw new Error(data.error || "unavailable");
+  data.result._bytes = raw.length;
+  data.result._status = res.status;
+  cache.set(path, data.result);
+  return data.result;
+}
+
+const absolute = href =>
+  /^https?:/i.test(href) ? href
+    : HOST + (href.startsWith("/") ? href : "/" + href);
+
+/* A telegra.ph article link becomes an internal route so readers stay here.
+   File and embed URLs are assets, not pages, and are left alone. */
+function internalPath(href) {
+  const abs = absolute(href);
+  if (!abs.startsWith(HOST + "/")) return null;
+  const rest = abs.slice(HOST.length + 1);
+  if (!rest || rest.startsWith("file/") || rest.startsWith("embed/")) return null;
+  return rest.split(/[?#]/)[0];
+}
+
+/* ---------- master post parsing ---------- */
+
+const textOf = n =>
+  typeof n === "string" ? n : (n.children || []).map(textOf).join("");
+
+function toEntry(href, title, meta) {
+  const cats = meta
+    .replace(/^[\s—–\-·|:]+/, "")
+    .split(",").map(s => s.trim()).filter(Boolean);
+  return {
+    title: (title || "").trim() || href,
+    url: absolute(href),
+    path: internalPath(href),
+    cats
+  };
+}
+
+function collect(nodes, out) {
+  for (const n of nodes || []) {
+    if (typeof n === "string" || !n) continue;
+    const kids = n.children || [];
+    const anchor = kids.find(k => k && typeof k === "object" && k.tag === "a");
+
+    if (anchor && anchor.attrs && anchor.attrs.href) {
+      const meta = kids.filter(k => typeof k === "string").join(" ");
+      out.push(toEntry(anchor.attrs.href, textOf(anchor), meta));
+      continue;
+    }
+    if (n.tag === "a" && n.attrs && n.attrs.href) {
+      out.push(toEntry(n.attrs.href, textOf(n), ""));
+      continue;
+    }
+    collect(kids, out);
+  }
+  return out;
+}
+
+const isNav = e => e.cats.some(c => c.toLowerCase() === "nav");
+const shown = e => e.cats.filter(c => c.toLowerCase() !== "nav");
+
+/* ---------- article rendering ----------
+   Telegraph's own tag whitelist, rebuilt as real elements so the article
+   inherits this site's type instead of an iframe's. */
+
+const OK = new Set(["a","aside","b","blockquote","br","code","em","figcaption",
+  "figure","h3","h4","hr","i","iframe","img","li","ol","p","pre","s","strong",
+  "u","ul","video"]);
+
+function renderNodes(nodes, parent, master) {
+  for (const n of nodes || []) {
+    if (typeof n === "string") {
+      parent.appendChild(document.createTextNode(n));
+      continue;
+    }
+    if (!n || !n.tag) continue;
+    if (!OK.has(n.tag)) { renderNodes(n.children, parent, master); continue; }
+
+    const node = document.createElement(n.tag);
+    const attrs = n.attrs || {};
+
+    if (n.tag === "a" && attrs.href) {
+      const inside = internalPath(attrs.href);
+      if (inside) {
+        node.href = link(master, inside);
+      } else {
+        node.href = absolute(attrs.href);
+        node.target = "_blank";
+        node.rel = "noopener noreferrer";
+      }
+    }
+
+    if (attrs.src && (n.tag === "img" || n.tag === "iframe" || n.tag === "video")) {
+      node.src = absolute(attrs.src);
+      if (n.tag === "img") { node.loading = "lazy"; node.alt = ""; }
+      if (n.tag === "iframe") {
+        node.loading = "lazy";
+        node.setAttribute("allowfullscreen", "");
+        node.setAttribute("frameborder", "0");
+      }
+      if (n.tag === "video") { node.controls = true; node.playsInline = true; }
+    }
+
+    renderNodes(n.children, node, master);
+    parent.appendChild(node);
+  }
+}
+
+/* The leading <aside> is the category line written by /post. It is shown
+   as tags under the title, so it is not repeated in the body. */
+function splitAside(content) {
+  const nodes = (content || []).slice();
+  let cats = [];
+  if (nodes[0] && nodes[0].tag === "aside") {
+    cats = textOf(nodes[0]).split(",").map(s => s.trim()).filter(Boolean);
+    nodes.shift();
+  }
+  return { cats, nodes };
+}
+
+/* ---------- state ---------- */
+
+const boot = $("boot");
+let master = null, masterPage = null;
+let posts = [], navItems = [], cats = [], navPaths = new Set();
+let active = null, query = "";
+
+async function say(text, cls) {
+  const line = el("span", cls);
+  line.textContent = text + "\n";
+  boot.appendChild(line);
+  await wait(90);
+}
+
+function matches(e) {
+  if (active && !e.cats.some(c => c.toLowerCase() === active)) return false;
+  if (!query) return true;
+  return (e.title + " " + e.cats.join(" ")).toLowerCase().includes(query);
+}
+
+/* ---------- views ---------- */
+
+function showIndex() {
+  document.title = masterPage.title;
+  syncMeta();
+  const view = $("view");
+  view.replaceChildren();
+
+  const tools = el("div", "tools");
+  const search = el("input", "search");
+  search.type = "search";
+  search.value = query;
+  search.placeholder = "Search titles and categories";
+  search.setAttribute("aria-label", "Search titles and categories");
+  search.addEventListener("input", () => {
+    query = search.value.trim().toLowerCase();
+    paint();
+  });
+  const count = el("span", "count");
+  count.id = "count";
+  tools.append(search, count);
+
+  const list = el("ul", "index");
+  list.id = "index";
+  view.append(tools, list);
+  paint();
+}
+
+function paint() {
+  const list = $("index");
+  if (!list) return;
+  const visible = posts.filter(matches);
+  list.replaceChildren();
+
+  for (const e of visible) {
+    const li = el("li", "item");
+    const a = el("a", null, e.title);
+    if (e.path) {
+      a.href = link(master, e.path);
+    } else {
+      a.href = e.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+    }
+    li.appendChild(a);
+
+    const tags = shown(e);
+    if (tags.length) {
+      const row = el("div", "tags");
+      for (const c of tags) {
+        const b = el("button", "tag" + (active === c.toLowerCase() ? " on" : ""), c);
+        b.type = "button";
+        b.addEventListener("click", () => setCategory(c.toLowerCase()));
+        row.appendChild(b);
+      }
+      li.appendChild(row);
+    }
+    list.appendChild(li);
+  }
+
+  if (!visible.length) list.appendChild(el("li", "empty", "Nothing matches that."));
+
+  $("count").textContent =
+    visible.length + (visible.length === 1 ? " post" : " posts");
+  syncBar();
+  checkAlign();
+}
+
+async function showArticle(path) {
+  syncMeta();
+  const view = $("view");
+  view.replaceChildren(el("p", "loading", "fetching " + path + "…"));
+
+  let page;
+  try {
+    page = await getPage(path);
+  } catch (err) {
+    view.replaceChildren();
+    view.appendChild(backLink());
+    view.appendChild(el("p", "empty", "That article could not be loaded — " + err.message));
+    return;
+  }
+
+  document.title = page.title + " · " + masterPage.title;
+  const { cats: tags, nodes } = splitAside(page.content);
+
+  // A nav page is furniture, not a post: no back link, no byline, no views.
+  const isPage = navPaths.has(path);
+
+  view.replaceChildren();
+  if (!isPage) view.appendChild(backLink());
+
+  const art = el("article", "article" + (isPage ? " bare" : ""));
+  art.appendChild(el("h1", null, page.title));
+
+  if (!isPage) {
+    const bits = [];
+    if (page.author_name) bits.push(page.author_name);
+    if (typeof page.views === "number") bits.push(page.views + " views");
+    if (bits.length) art.appendChild(el("p", "byline", bits.join(" · ")));
+  }
+
+  const visible = isPage ? [] : tags.filter(c => c.toLowerCase() !== "nav");
+  if (visible.length) {
+    const row = el("div", "tags");
+    for (const c of visible) {
+      const b = el("button", "tag", c);
+      b.type = "button";
+      b.addEventListener("click", () => {
+        active = c.toLowerCase();
+        location.hash = link(master);
+      });
+      row.appendChild(b);
+    }
+    art.appendChild(row);
+  }
+
+  const body = el("div", "body");
+  renderNodes(nodes, body, master);
+  art.appendChild(body);
+
+  const origin = el("p", "origin");
+  const a = el("a", null, "View on telegra.ph");
+  a.href = page.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+  origin.append("Published to Telegraph. ", a);
+  art.appendChild(origin);
+
+  view.appendChild(art);
+  scrollTo(0, 0);
+  syncBar();
+  checkAlign();
+}
+
+function backLink() {
+  const a = el("a", "back", "\u2190\u00a0 back");
+  a.href = link(master);
+  return a;
+}
+
+/* ---------- bar ---------- */
+
+function setCategory(c) {
+  active = active === c ? null : c;
+  closeDrop();
+  if (route().article) location.hash = link(master); else paint();
+}
+
+function closeDrop() {
+  $("drop").classList.remove("open");
+  $("catbtn").setAttribute("aria-expanded", "false");
+}
+
+function syncBar() {
+  $("catbtn").classList.toggle("on", !!active);
+  $("catbtn").textContent = active || "Categories";
+  for (const b of $("drop").querySelectorAll("button[data-cat]")) {
+    b.classList.toggle("on", b.dataset.cat === active);
+  }
+}
+
+function buildBar() {
+  $("brand").textContent = masterPage.title;
+  $("brand").href = link(master);
+
+  const pages = $("pages");
+  const drop = $("drop");
+
+  for (const e of navItems) {
+    const a = el("a", null, e.title);
+    if (e.path) a.href = link(master, e.path);
+    else { a.href = e.url; a.target = "_blank"; a.rel = "noopener noreferrer"; }
+    pages.appendChild(a);
+  }
+
+  const all = el("button", "", "All posts");
+  all.type = "button";
+  all.dataset.cat = "";
+  all.addEventListener("click", () => {
+    active = null; closeDrop();
+    if (route().article) location.hash = link(master); else paint();
+  });
+  drop.append(el("h2", null, "Categories"), all);
+
+  for (const [name, n] of cats) {
+    const b = el("button");
+    b.type = "button";
+    b.dataset.cat = name.toLowerCase();
+    b.append(el("span", null, name), el("span", "n", String(n)));
+    b.addEventListener("click", () => setCategory(name.toLowerCase()));
+    drop.appendChild(b);
+  }
+
+  if (navItems.length) {
+    const wrap = el("div", "inpanel");
+    wrap.appendChild(el("h2", null, "Pages"));
+    for (const e of navItems) {
+      const a = el("a", null, e.title);
+      a.href = e.path ? link(master, e.path) : e.url;
+      wrap.appendChild(a);
+    }
+    drop.appendChild(wrap);
+  }
+
+  $("catbtn").addEventListener("click", ev => {
+    ev.stopPropagation();
+    const open = drop.classList.toggle("open");
+    $("catbtn").setAttribute("aria-expanded", String(open));
+  });
+  document.addEventListener("click", closeDrop);
+  drop.addEventListener("click", ev => ev.stopPropagation());
+  document.addEventListener("keydown", ev => { if (ev.key === "Escape") closeDrop(); });
+
+  $("bar").hidden = false;
+}
+
+function buildFooter() {
+  const f = $("foot");
+  f.appendChild(el("p", null,
+    "Assembled in your browser from Telegraph. " +
+    "No server, no database, no third-party requests."));
+
+  const p = el("p");
+  const src = el("a", null, "Telepatch");
+  src.href = SOURCE; src.rel = "noopener";
+  const bot = el("a", null, "@telepatchbot");
+  bot.href = BOT; bot.rel = "noopener";
+  const idx = el("a", null, "index page");
+  idx.href = masterPage.url; idx.rel = "noopener"; idx.target = "_blank";
+
+  p.append("Published with ", src, " via ", bot, " · ", idx);
+  f.appendChild(p);
+  f.hidden = false;
+}
+
+/* ---------- boot ---------- */
+
+async function start(r) {
+  master = r.master;
+  const t0 = performance.now();
+
+  await say("telepatch");
+  await say("resolving " + master);
+
+  try {
+    masterPage = await getPage(master);
+  } catch (err) {
+    await say("could not load that page — " + err.message, "err");
+    await say("check the link, or ask the publisher for a current one.");
+    boot.classList.add("done");
+    return;
+  }
+
+  // Every line below is measured, not decorative. One host, one request.
+  await say("api.telegra.ph · " + masterPage._status + " · " +
+            Math.round(masterPage._bytes / 102.4) / 10 + " kB · 1 request");
+  await say(masterPage.title +
+            (masterPage.author_name ? " — " + masterPage.author_name : ""));
+
+  const entries = collect(masterPage.content, []);
+  navItems = entries.filter(isNav);
+  navPaths = new Set(navItems.map(e => e.path).filter(Boolean));
+  posts = entries.filter(e => !isNav(e));
+
+  await say(entries.length + " links · " + posts.length + " posts · " +
+            navItems.length + " pages");
+
+  const counts = new Map();
+  for (const e of posts) for (const c of shown(e)) counts.set(c, (counts.get(c) || 0) + 1);
+  cats = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+
+  const names = cats.map(c => c[0]);
+  await say(cats.length + " categories" +
+            (names.length ? ": " + names.slice(0, 6).join(", ") +
+             (names.length > 6 ? ", +" + (names.length - 6) : "") : ""));
+
+  await say("ready · " + Math.round(performance.now() - t0) + " ms");
+  boot.classList.add("done");
+  retireBoot();
+
+  buildBar();
+  buildFooter();
+  show(route());
+
+  addEventListener("hashchange", () => {
+    const next = route();
+    if (next.master !== master) { location.reload(); return; }
+    show(next);
+  });
+}
+
+function show(r) {
+  if (r.article) showArticle(r.article); else showIndex();
+}
+
+/* The site title and the content must share a left edge. This asserts it
+   rather than trusting it, and stays quiet unless something drifts. */
+function checkAlign() {
+  requestAnimationFrame(() => {
+    const brand = $("brand");
+    const first = $("view").firstElementChild;
+    if (!brand || !first || $("bar").hidden) return;
+    const a = brand.getBoundingClientRect().left;
+    const b = first.getBoundingClientRect().left;
+    if (Math.abs(a - b) > 0.5) {
+      console.warn(
+        "[telepatch] left edges differ by " + (b - a).toFixed(1) + "px — " +
+        "title at " + a.toFixed(1) + ", content at " + b.toFixed(1) +
+        " (" + first.className + " " + first.tagName.toLowerCase() + ")"
+      );
+    }
+  });
+}
+
+/* The narration has done its job after a few seconds. It collapses away and
+   leaves the publication's author in its place - on the index only, where
+   it names the publication rather than competing with an article title. */
+let authorReady = false;
+
+function syncMeta(animate) {
+  const meta = $("sitemeta");
+  const wanted = authorReady && !route().article && masterPage &&
+                 !!masterPage.author_name;
+  if (wanted) meta.textContent = masterPage.author_name;
+  meta.hidden = !wanted;
+  meta.classList.toggle("in", wanted && !animate);
+}
+
+function retireBoot() {
+  setTimeout(() => {
+    const mast = $("masthead");
+    const meta = $("sitemeta");
+
+    authorReady = true;
+
+    if (REDUCED) {
+      boot.remove();
+      syncMeta();
+      return;
+    }
+
+    // Measure both ends of the move: the masthead as it stands, and what it
+    // will be once the narration is gone. Animating between them keeps the
+    // page below from lurching.
+    const from = mast.offsetHeight;
+    syncMeta(true);
+    boot.style.display = "none";
+    const to = mast.offsetHeight;
+    boot.style.display = "";
+
+    mast.style.maxHeight = from + "px";
+
+    requestAnimationFrame(() => {
+      mast.style.maxHeight = to + "px";
+      boot.classList.add("fade");
+      meta.classList.toggle("in", !meta.hidden);
+    });
+
+    setTimeout(() => {
+      boot.remove();
+      mast.style.maxHeight = "";
+    }, 700);
+  }, 5000);
+}
+
+/* ---------- landing ---------- */
+
+function landing() {
+  boot.remove();
+  const wrap = el("div", "intro");
+
+  wrap.appendChild(el("h1", null, "A publication that assembles itself."));
+  wrap.appendChild(el("p", "lead",
+    "Telepatch turns one Telegraph page into a small website. " +
+    "Add its address after the # and it builds in front of you."));
+  wrap.appendChild(el("p", null,
+    "Nothing is stored here. Articles are fetched from Telegraph and laid " +
+    "out in your browser. No account, no tracking, no third-party requests."));
+
+  const steps = el("ul", "steps");
+  for (const [cmd, why] of [
+    ["/new", "Create an identity in Telegram. The bot keeps no copy of it."],
+    ["/post", "Write. First line is the title, second line is your categories."],
+    ["/site", "Build your index. The bot hands you a link like the one below."]
+  ]) {
+    const li = el("li");
+    li.append(el("code", null, cmd), el("span", null, why));
+    steps.appendChild(li);
+  }
+  wrap.appendChild(steps);
+
+  const p = el("p");
+  const a = el("a", null, "@telepatchbot");
+  a.href = BOT; a.rel = "noopener";
+  p.append("Start in Telegram with ", a, ".");
+  wrap.appendChild(p);
+
+  $("view").appendChild(wrap);
+
+  const f = $("foot");
+  const q = el("p");
+  const src = el("a", null, "Read the source");
+  src.href = SOURCE; src.rel = "noopener";
+  q.append(src, " · Telepatch is a bridge between Telegram, Telegraph and the open web.");
+  f.appendChild(q);
+  f.hidden = false;
+}
+
+const r = route();
+if (r.master) start(r); else landing();
+
+})();
+</script>
 </body>
 </html>
