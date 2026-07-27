@@ -1119,6 +1119,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/privacy - what this bot keeps (nothing)\n"
         "/about - set your site's introduction\n"
         "/footer - set your site's footer\n"
+        "/link - add a GitHub page to your index\n"
         "/byline - how bylines show on your site\n"
         "/telepatch - about Telepatch",
 
@@ -1176,7 +1177,8 @@ async def howto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<b>Changing things afterwards</b>\n"
         "/revise - reply to a post's Published message to rewrite it.\n"
         "/about and /footer - the introduction and footer on your site.\n"
-        "/site - refresh the index after publishing.",
+        "/site - refresh the index after publishing.\n"
+        "/link - add a GitHub README to your index, read live.",
 
         parse_mode=ParseMode.HTML,
     )
@@ -1345,6 +1347,137 @@ async def about_site(update: Update, context: ContextTypes.DEFAULT_TYPE):
             selective=True,
             input_field_placeholder="a sentence or two",
         ),
+    )
+
+
+async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Add an entry to the index that is not a Telegraph page.
+
+    A GitHub link is rendered by the website as an article, read live at
+    the moment someone opens it. Any other link is listed and opens
+    outward. Either way the entry is an ordinary item in the master post's
+    list, so /site keeps it.
+    """
+
+    token, path = await find_site(update, context, "/link")
+
+    if not path:
+        return
+
+    await update.message.reply_text(
+        "Reply with the entry, a line at a time:\n\n"
+        "<code>https://github.com/owner/repo\n"
+        "How this site is built\n"
+        "code, live\n\n"
+        "A sentence for the index.</code>\n\n"
+        "Line 1 the address, line 2 the title, line 3 categories if it "
+        "reads like a list, anything after that the excerpt.\n\n"
+        "A GitHub repository means its README. A file link means that file."
+        + carrier_link("link", token, site=path),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+        reply_markup=ForceReply(
+            selective=True,
+            input_field_placeholder="address, title, categories",
+        ),
+    )
+
+
+async def add_external(message, token, path):
+    """
+    Splice one entry into the index list, dated today so it sorts newest.
+    """
+
+    lines = [line.strip() for line in (message.text or "").split("\n")]
+    lines = [line for line in lines if line or True]
+
+    url = normalize_url(lines[0]) if lines else None
+
+    # normalize_url will happily put https:// in front of anything, so the
+    # result has to look like a host before it goes into somebody's index.
+    if not url or not re.match(r"^https?://[^\s/]+\.[^\s/]+", url):
+        await message.reply_text(
+            "The first line needs to be a web address, like\n"
+            "<code>https://github.com/owner/repo</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    title = lines[1].strip() if len(lines) > 1 else ""
+
+    if not title:
+        await message.reply_text("The second line needs to be a title.")
+        return
+
+    categories = parse_categories(lines[2]) if len(lines) > 2 else None
+
+    rest = lines[(3 if categories else 2):]
+    excerpt = " ".join(part for part in rest if part).strip()
+
+    try:
+        page = telegraph("getPage", path=path, return_content="true")
+
+    except Exception as error:
+        await message.reply_text(f"Could not find your index:\n{error}")
+        return
+
+    head, middle, foot = split_master(page.get("content"))
+
+    listing = middle[0] if middle and middle[0].get("tag") == "ul" else None
+
+    if listing is None:
+        listing = {"tag": "ul", "children": []}
+        middle = [listing]
+
+    children = [
+        {"tag": "a", "attrs": {"href": url}, "children": [title]}
+    ]
+
+    # No reading time: the length of somebody else's page is not ours to
+    # claim, and the website copes with the field being absent.
+    meta = INDEX_SEP + date.today().isoformat()
+
+    if categories:
+        meta += " · " + ", ".join(categories)
+
+    children.append(meta)
+
+    if excerpt:
+        children.append({"tag": "br"})
+        children.append(excerpt)
+
+    listing.setdefault("children", []).insert(
+        0, {"tag": "li", "children": children}
+    )
+
+    try:
+        telegraph(
+            "editPage",
+            access_token=token,
+            path=path,
+            title=page["title"],
+            content=json.dumps(
+                head + middle + foot
+                + [marker_node(read_byline(page.get("content")))]
+            ),
+            author_name=page.get("author_name") or "",
+            author_url=page.get("author_url") or "",
+        )
+
+    except Exception as error:
+        await message.reply_text(f"Could not save it:\n{error}")
+        return
+
+    kind = "read live from GitHub" if "github.com" in url else "an outward link"
+
+    await message.reply_text(
+        f"<b>{title}</b> added to your index - {kind}.\n\n"
+        f"{SITE_URL}#{path}\n\n"
+        "Reply to this message with /link to add another."
+        + carrier_link("page", token, site=path),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
     )
 
 
@@ -2521,6 +2654,10 @@ async def on_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await set_footer(update.message, token, extras.get("site", ""))
         return
 
+    if field == "link":
+        await add_external(update.message, token, extras.get("site", ""))
+        return
+
     if field in ("post", "anon"):
 
         override = ("n" in extras) and (extras.get("n", ""), extras.get("u", ""))
@@ -2587,6 +2724,7 @@ async def register_commands(app):
         ("site", "Build or refresh your public index"),
         ("about", "Set the introduction on your site"),
         ("footer", "Set the footer on your site"),
+        ("link", "Add a GitHub or outward entry to your index"),
         ("byline", "How bylines show: linked, separate, plain"),
         ("manage", "Byline, URL, revoke - reply to your pinned identity"),
         ("views", "Views for any page: /views <url>"),
@@ -2623,6 +2761,7 @@ def main():
     app.add_handler(CommandHandler("about", about_site))
     app.add_handler(CommandHandler("footer", footer_site))
     app.add_handler(CommandHandler("byline", byline_site))
+    app.add_handler(CommandHandler("link", link_cmd))
     app.add_handler(CommandHandler("views", views))
 
     app.add_handler(CallbackQueryHandler(on_button))
