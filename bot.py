@@ -92,6 +92,17 @@ INDEX_MARKS = (MASTER_MARK, RETIRED_MARK)
 # masthead reader can tell it apart from the publisher's own prose.
 EMPTY_NOTICE = "Nothing published yet."
 
+# How the website renders an article's byline. A site-wide choice, because
+# Telegraph gives a page only author_name and author_url — there is nowhere
+# to record a display preference per article. It rides on the marker line so
+# the master post still has exactly one machine-readable sentence.
+#
+#   linked    the name is a link to the author URL
+#   separate  the name is plain and the URL is shown beside it
+#   plain     the name only; the URL is stored but never displayed
+BYLINE_MODES = ("linked", "separate", "plain")
+BYLINE_DEFAULT = "linked"
+
 
 # Carrier URL for the hidden token in ForceReply prompts. Never visited -
 # it exists only so the token rides along as a message entity.
@@ -1108,6 +1119,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/privacy - what this bot keeps (nothing)\n"
         "/about - set your site's introduction\n"
         "/footer - set your site's footer\n"
+        "/byline - how bylines show on your site\n"
         "/telepatch - about Telepatch",
 
         parse_mode=ParseMode.HTML,
@@ -1336,6 +1348,66 @@ async def about_site(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def byline_site(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Choose how the website shows an article's byline.
+
+    Site-wide rather than per-article: a Telegraph page has room for a name
+    and a URL and nothing else, so there is no per-page slot for a display
+    choice. It lives on the master post's marker line instead.
+    """
+
+    token, path = await find_site(update, context, "/byline")
+
+    if not path:
+        return
+
+    try:
+        page = telegraph("getPage", path=path, return_content="true")
+
+    except Exception as error:
+        await update.message.reply_text(f"Could not find your index:\n{error}")
+        return
+
+    current = read_byline(page.get("content"))
+    wanted = context.args[0].lower().strip() if context.args else ""
+
+    if wanted not in BYLINE_MODES:
+        await update.message.reply_text(
+            f"Byline is <b>{current}</b>.\n\n"
+            "<code>/byline linked</code> - the name links to the author URL\n"
+            "<code>/byline separate</code> - the name plain, URL shown beside it\n"
+            "<code>/byline plain</code> - the name only\n\n"
+            "This applies to every article on your site.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    head, middle, foot = split_master(page.get("content"))
+
+    try:
+        telegraph(
+            "editPage",
+            access_token=token,
+            path=path,
+            title=page["title"],
+            content=json.dumps(head + middle + foot + [marker_node(wanted)]),
+            author_name=page.get("author_name") or "",
+            author_url=page.get("author_url") or "",
+        )
+
+    except Exception as error:
+        await update.message.reply_text(f"Could not save it:\n{error}")
+        return
+
+    await update.message.reply_text(
+        f"Bylines are now <b>{wanted}</b>.\n\n{SITE_URL}#{path}"
+        + carrier_link("page", token, site=path),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
 async def footer_site(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Set the note that appears at the foot of every page on your site.
@@ -1380,7 +1452,7 @@ async def set_footer(message, token, path):
     head, middle, _ = split_master(page.get("content"))
 
     content = head + middle + footer + [
-        {"tag": "p", "children": [MASTER_MARK]}
+        marker_node(read_byline(page.get("content")))
     ]
 
     try:
@@ -1426,7 +1498,7 @@ async def set_masthead(message, token, path):
     masthead = [] if is_clear(text) else to_content(message.text_html or text)
 
     _, middle, foot = split_master(page.get("content"))
-    rest = middle + foot + [{"tag": "p", "children": [MASTER_MARK]}]
+    rest = middle + foot + [marker_node(read_byline(page.get("content")))]
 
     try:
         telegraph(
@@ -2001,6 +2073,34 @@ def split_master(content):
     )
 
 
+def read_byline(content):
+    """
+    The byline mode recorded on the marker line, or the default.
+    """
+
+    for node in content or []:
+
+        text = node_text(node)
+
+        if MASTER_MARK not in text:
+            continue
+
+        found = re.search(r"byline=(\w+)", text)
+
+        if found and found.group(1) in BYLINE_MODES:
+            return found.group(1)
+
+    return BYLINE_DEFAULT
+
+
+def marker_node(mode=BYLINE_DEFAULT):
+    """
+    The one line the bot writes for itself, carrying the site's settings.
+    """
+
+    return {"tag": "p", "children": [f"{MASTER_MARK} byline={mode}"]}
+
+
 def read_footer(content):
     """
     The publisher's own closing note, kept across rebuilds like the masthead.
@@ -2010,7 +2110,7 @@ def read_footer(content):
 
 
 def build_index(scanned, master_path=None, known_dates=None,
-                masthead=None, footer=None):
+                masthead=None, footer=None, byline=BYLINE_DEFAULT):
     """
     Lay the account's articles out as the content of one master post.
 
@@ -2091,7 +2191,7 @@ def build_index(scanned, master_path=None, known_dates=None,
     )
 
     content.extend(footer or [])
-    content.append({"tag": "p", "children": [MASTER_MARK]})
+    content.append(marker_node(byline))
 
     return entries, content
 
@@ -2145,7 +2245,7 @@ async def rebuild_site(message, token, master_path=None, title=None):
     footer = read_footer(old)
 
     entries, content = build_index(
-        scanned, master_path, known_dates, masthead, footer
+        scanned, master_path, known_dates, masthead, footer, read_byline(old)
     )
 
     byline = info.get("author_name") or info.get("short_name") or ""
@@ -2434,6 +2534,7 @@ async def register_commands(app):
         ("site", "Build or refresh your public index"),
         ("about", "Set the introduction on your site"),
         ("footer", "Set the footer on your site"),
+        ("byline", "How bylines show: linked, separate, plain"),
         ("manage", "Byline, URL, revoke - reply to your pinned identity"),
         ("views", "Views for any page: /views <url>"),
         ("privacy", "What this bot keeps (nothing)"),
@@ -2468,6 +2569,7 @@ def main():
     app.add_handler(CommandHandler("site", site))
     app.add_handler(CommandHandler("about", about_site))
     app.add_handler(CommandHandler("footer", footer_site))
+    app.add_handler(CommandHandler("byline", byline_site))
     app.add_handler(CommandHandler("views", views))
 
     app.add_handler(CallbackQueryHandler(on_button))
