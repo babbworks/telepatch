@@ -372,6 +372,7 @@ const API = "https://api.telegra.ph";
 const HOST = "https://telegra.ph";
 const SOURCE = "https://github.com/babbworks/telepatch";
 const BOT = "https://t.me/telepatchbot";
+const TELEGRAPH_API = "https://telegra.ph/api";
 
 /* Destination for the word "Assembled" in the footer — the page explaining
    that these pages are built in the reader's browser. Empty until the
@@ -891,21 +892,26 @@ function buildFooter() {
   const f = $("foot");
   const p = el("p");
 
-  // "Assembled" becomes a link once the Telepatch project site has a page
+  // "assembled" becomes a link once the Telepatch project site has a page
   // explaining what assembling in the browser means. Set ASSEMBLED above.
   const word = ASSEMBLED
-    ? el("a", null, "Assembled")
-    : el("span", null, "Assembled");
+    ? el("a", null, "assembled")
+    : el("span", null, "assembled");
   if (ASSEMBLED) { word.href = ASSEMBLED; word.rel = "noopener"; }
 
-  const src = el("a", null, "Telepatch");
-  src.href = SOURCE; src.rel = "noopener";
-  const bot = el("a", null, "@telepatchbot");
-  bot.href = BOT; bot.rel = "noopener";
-  const idx = el("a", null, "index page");
-  idx.href = masterPage.url; idx.rel = "noopener"; idx.target = "_blank";
+  const link = (text, href) => {
+    const a = el("a", null, text);
+    a.href = href; a.rel = "noopener"; a.target = "_blank";
+    return a;
+  };
 
-  p.append(word, " with ", src, " via ", bot, " · ", idx);
+  p.append(
+    "Site ", word, " with ", link("Telepatch", SOURCE),
+    " using ", link("@telepatchbot", BOT),
+    ". All content published via ", link("telegraph", TELEGRAPH_API),
+    ". - ", link("index page", masterPage.url)
+  );
+
   f.appendChild(p);
   f.hidden = false;
 }
