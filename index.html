@@ -186,7 +186,10 @@ main{padding-block-end:6rem;min-height:0;flex:1 0 auto}
   letter-spacing:-.01em;color:var(--ink);
   margin:0 0 .35rem;
 }
-.lede p{margin:0 0 .9rem}
+/* Spreads the lines of a short paragraph evenly instead of leaving two
+   words alone on the last one. Costs nothing and changes no type sizes;
+   browsers without it simply wrap normally. */
+.lede p{margin:0 0 .9rem;text-wrap:balance}
 .lede p:last-child{margin-bottom:0}
 .lede h3{font-size:1.2rem;margin:1.4rem 0 .5rem}
 .lede blockquote{
@@ -657,6 +660,7 @@ function showIndex() {
     intro.appendChild(el("h2", "ledehead", "About"));
     renderNodes(masthead, intro, master);
     view.appendChild(intro);
+    fitLede();
   }
 
   const tools = el("div", "tools");
@@ -1038,6 +1042,46 @@ async function start(r) {
 function show(r) {
   if (r.article) showArticle(r.article); else showIndex();
 }
+
+/* Shrink the introduction, within a narrow range, only when doing so
+   removes a line of text.
+
+   It never grows past the design size and never drops below the floor, so
+   the worst case is the type we would have set anyway. Some paragraphs
+   cannot be fixed at any size in range — the line stays, and that is the
+   honest outcome rather than shrinking the text until it does. */
+const LEDE_MAX = 1.12, LEDE_MIN = 0.98, LEDE_STEP = 0.02;
+
+function ledeLines(box) {
+  let total = 0;
+  for (const p of box.querySelectorAll("p")) {
+    const cs = getComputedStyle(p);
+    const lh = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.6;
+    total += Math.round(p.getBoundingClientRect().height / lh);
+  }
+  return total;
+}
+
+function fitLede() {
+  const box = document.querySelector(".lede");
+  if (!box) return;
+
+  box.style.fontSize = LEDE_MAX + "rem";
+  const base = ledeLines(box);
+
+  for (let s = LEDE_MAX - LEDE_STEP; s >= LEDE_MIN - 1e-9; s -= LEDE_STEP) {
+    box.style.fontSize = s.toFixed(2) + "rem";
+    if (ledeLines(box) < base) return;
+  }
+
+  box.style.fontSize = LEDE_MAX + "rem";
+}
+
+let fitTimer;
+addEventListener("resize", () => {
+  clearTimeout(fitTimer);
+  fitTimer = setTimeout(fitLede, 150);
+});
 
 /* The site title and the content must share a left edge. This asserts it
    rather than trusting it, and stays quiet unless something drifts. */
