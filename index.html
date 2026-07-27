@@ -498,15 +498,26 @@ async function getPage(path) {
   return data.result;
 }
 
-const absolute = href =>
-  /^https?:/i.test(href) ? href
-    : HOST + (href.startsWith("/") ? href : "/" + href);
+/* Only schemes that cannot execute. A javascript: href used to be defused
+   by accident here — it failed the http test and got HOST glued to the
+   front — which worked but was not a decision. Anything with a scheme we
+   do not allow is now refused outright, and callers skip the attribute. */
+const SAFE_SCHEME = /^(?:https?:|mailto:)/i;
+
+const absolute = href => {
+  const value = String(href == null ? "" : href).trim();
+  if (!value) return "";
+  if (SAFE_SCHEME.test(value)) return value;
+  if (value.startsWith("/")) return HOST + value;
+  if (/^[a-z][a-z0-9+.\-]*:/i.test(value)) return "";
+  return HOST + "/" + value;
+};
 
 /* A telegra.ph article link becomes an internal route so readers stay here.
    File and embed URLs are assets, not pages, and are left alone. */
 function internalPath(href) {
   const abs = absolute(href);
-  if (!abs.startsWith(HOST + "/")) return null;
+  if (!abs || !abs.startsWith(HOST + "/")) return null;
   const rest = abs.slice(HOST.length + 1);
   if (!rest || rest.startsWith("file/") || rest.startsWith("embed/")) return null;
   return rest.split(/[?#]/)[0];
@@ -547,9 +558,12 @@ function toEntry(href, title, meta, excerpt) {
 
   const cats = rest.split(",").map(s => s.trim()).filter(Boolean);
 
+  const url = absolute(href);
+  if (!url) return null;
+
   return {
     title: (title || "").trim() || href,
-    url: absolute(href),
+    url,
     path: internalPath(href),
     date,
     minutes,
@@ -571,16 +585,18 @@ function collect(nodes, out) {
       const head = cut === -1 ? kids : kids.slice(0, cut);
       const tail = cut === -1 ? [] : kids.slice(cut + 1);
 
-      out.push(toEntry(
+      const entry = toEntry(
         anchor.attrs.href,
         textOf(anchor),
         head.filter(k => typeof k === "string").join(" "),
         tail.map(textOf).join(" ")
-      ));
+      );
+      if (entry) out.push(entry);
       continue;
     }
     if (n.tag === "a" && n.attrs && n.attrs.href) {
-      out.push(toEntry(n.attrs.href, textOf(n), ""));
+      const bare = toEntry(n.attrs.href, textOf(n), "");
+      if (bare) out.push(bare);
       continue;
     }
     collect(kids, out);
@@ -641,14 +657,19 @@ function renderNodes(nodes, parent, master) {
       if (inside) {
         node.href = link(master, inside);
       } else {
-        node.href = absolute(attrs.href);
-        node.target = "_blank";
-        node.rel = "noopener noreferrer";
+        const href = absolute(attrs.href);
+        if (href) {
+          node.href = href;
+          node.target = "_blank";
+          node.rel = "noopener noreferrer";
+        }
       }
     }
 
     if (attrs.src && (n.tag === "img" || n.tag === "iframe" || n.tag === "video")) {
-      node.src = absolute(attrs.src);
+      const src = absolute(attrs.src);
+      if (!src) continue;
+      node.src = src;
       if (n.tag === "img") { node.loading = "lazy"; node.alt = ""; }
       if (n.tag === "iframe") {
         node.loading = "lazy";

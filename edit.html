@@ -236,6 +236,21 @@ let path = parts[1] || "";
 
 let account = null;
 
+/* Only schemes that cannot execute. Telegraph strips a javascript: href on
+   its own side, but this editor's address bar holds the access token, so a
+   link pasted into the Link prompt must never become live script here.
+   Anything unrecognised is refused rather than guessed at. */
+const SAFE_SCHEME = /^(?:https?:|mailto:)/i;
+
+function safeUrl(raw) {
+  const value = String(raw == null ? "" : raw).trim();
+  if (!value) return null;
+  if (SAFE_SCHEME.test(value)) return value;
+  if (value.startsWith("/")) return "https://telegra.ph" + value;
+  if (/^[a-z][a-z0-9+.\-]*:/i.test(value)) return null;   // some other scheme
+  return "https://telegra.ph/" + value;
+}
+
 async function call(method, params) {
   const body = new URLSearchParams(params);
   const res = await fetch(API + "/" + method, { method: "POST", body });
@@ -268,8 +283,14 @@ function toNodes(root) {
     if (tag === "br" || tag === "hr") { out.push({ tag }); continue; }
 
     const node = { tag };
-    if (tag === "a" && n.getAttribute("href")) node.attrs = { href: n.getAttribute("href") };
-    if (tag === "img" && n.getAttribute("src")) node.attrs = { src: n.getAttribute("src") };
+    if (tag === "a") {
+      const href = safeUrl(n.getAttribute("href"));
+      if (href) node.attrs = { href };
+    }
+    if (tag === "img") {
+      const src = safeUrl(n.getAttribute("src"));
+      if (src) node.attrs = { src };
+    }
 
     const kids = toNodes(n);
     if (kids.length) node.children = kids;
@@ -474,9 +495,13 @@ function renderInto(nodes, parent) {
     if (!n || !n.tag) continue;
     const tag = BLOCK.has(n.tag) || KEEP[n.tag.toUpperCase()] ? n.tag : "p";
     const node = document.createElement(tag);
-    if (n.tag === "a" && n.attrs && n.attrs.href) node.href = n.attrs.href;
+    if (n.tag === "a" && n.attrs) {
+      const href = safeUrl(n.attrs.href);
+      if (href) node.href = href;
+    }
     if (n.attrs && n.attrs.src) {
-      node.src = /^https?:/.test(n.attrs.src) ? n.attrs.src : "https://telegra.ph" + n.attrs.src;
+      const src = safeUrl(n.attrs.src);
+      if (src) node.src = src;
     }
     renderInto(n.children, node);
     parent.appendChild(node);
@@ -491,8 +516,11 @@ for (const b of document.querySelectorAll(".tools button")) {
     if (b.dataset.cmd) return cmd(b.dataset.cmd);
     if (b.dataset.block) return cmd("formatBlock", b.dataset.block);
     if (b.hasAttribute("data-link")) {
-      const url = prompt("Link to");
-      if (url) cmd("createLink", url);
+      const typed = prompt("Link to");
+      if (typed === null) return;
+      const url = safeUrl(typed);
+      if (!url) { say("That link uses a scheme this editor will not make.", true); return; }
+      cmd("createLink", url);
     }
   });
 }
