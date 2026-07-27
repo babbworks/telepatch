@@ -1012,6 +1012,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "token is picked up automatically:\n\n"
 
         "/post - publish an article\n"
+        "/howto - how to write a post, in brief\n"
         "/pages - list what you have published\n"
         "/revise - rewrite a post (reply to its Published message)\n"
         "/site - build your public website index\n"
@@ -1035,6 +1036,50 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Telepatch is a lightweight publishing bridge between Telegram, "
         "Telegraph, and the open web.\n\n"
         f"Source: {SOURCE_URL}"
+    )
+
+
+async def howto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    The whole writing surface on one screen. Kept to a line or two per idea -
+    anything longer stops being a reference and starts being documentation.
+    """
+
+    await update.message.reply_text(
+        "<b>Writing a post</b>\n"
+        "Reply to your pinned identity with /post.\n"
+        "Line 1 is the title. Line 2 is categories if it reads like a list. "
+        "Everything after is the body.\n\n"
+
+        "<code>On the price of tin\n"
+        "tin, industry\n\n"
+        "The price held steady, then moved sharply.\n\n"
+        "## What moved it\n\n"
+        "Three things did.</code>\n\n"
+
+        "<b>Formatting</b>\n"
+        "Bold, italics, underline, strikethrough, links, code and quotes: "
+        "type them in Telegram and they carry over.\n"
+        "<code>#</code> or <code>##</code> starts a heading, "
+        "<code>###</code> a subheading. Two or more build a contents list.\n\n"
+
+        "<b>Pictures and video</b>\n"
+        "An image URL alone on a line becomes a picture; words after it "
+        "become the caption.\n"
+        "YouTube, Vimeo and Twitter links alone on a line become embeds.\n"
+        "No uploads here - /manage, then Upload image, opens the Telegraph "
+        "editor. Best on a laptop.\n\n"
+
+        "<b>Bylines</b>\n"
+        "/manage offers New post for your saved byline, Post anonymous for "
+        "none, or a different byline for one post.\n\n"
+
+        "<b>Changing things afterwards</b>\n"
+        "/revise - reply to a post's Published message to rewrite it.\n"
+        "/about and /footer - the introduction and footer on your site.\n"
+        "/site - refresh the index after publishing.",
+
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -2270,6 +2315,7 @@ async def register_commands(app):
     await app.bot.set_my_commands([
         ("new", "Create a Telepatch identity"),
         ("post", "Publish - reply to your pinned identity"),
+        ("howto", "How to write a post, in brief"),
         ("pages", "List your pages - reply to your pinned identity"),
         ("revise", "Rewrite a post - reply to its Published message"),
         ("site", "Build or refresh your public index"),
@@ -2298,6 +2344,7 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("howto", howto))
     app.add_handler(CommandHandler("privacy", privacy))
     app.add_handler(CommandHandler("telepatch", about))
     app.add_handler(CommandHandler("new", new))
