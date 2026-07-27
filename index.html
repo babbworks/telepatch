@@ -235,6 +235,11 @@ main{padding-block-end:6rem;min-height:0;flex:1 0 auto}
 .pager .t{font-size:1.02rem;line-height:1.3;color:var(--ink)}
 .pager a:hover .t{color:var(--patch)}
 
+.excerpt{
+  margin:.4rem 0 0;font-size:.96rem;line-height:1.5;color:var(--graphite);
+  max-width:42rem;
+}
+
 .empty{font-family:var(--sans);font-size:.9rem;color:var(--graphite);padding:2rem 0}
 
 /* ---- article, rendered here rather than sent away ---- */
@@ -443,14 +448,21 @@ function fmtDate(iso) {
   return +m[3] + " " + MONTHS[+m[2] - 1] + " " + m[1];
 }
 
-function toEntry(href, title, meta) {
+function toEntry(href, title, meta, excerpt) {
   let rest = meta.replace(/^[\s—–\-·|:]+/, "");
   let date = "";
+  let minutes = 0;
 
   const stamp = /^(\d{4}-\d{2}-\d{2})\s*[·•,]?\s*/.exec(rest);
   if (stamp) {
     date = stamp[1];
     rest = rest.slice(stamp[0].length);
+  }
+
+  const read = /^(\d+)\s*min\s*[·•,]?\s*/i.exec(rest);
+  if (read) {
+    minutes = +read[1];
+    rest = rest.slice(read[0].length);
   }
 
   const cats = rest.split(",").map(s => s.trim()).filter(Boolean);
@@ -460,6 +472,8 @@ function toEntry(href, title, meta) {
     url: absolute(href),
     path: internalPath(href),
     date,
+    minutes,
+    excerpt: (excerpt || "").trim(),
     cats
   };
 }
@@ -471,8 +485,18 @@ function collect(nodes, out) {
     const anchor = kids.find(k => k && typeof k === "object" && k.tag === "a");
 
     if (anchor && anchor.attrs && anchor.attrs.href) {
-      const meta = kids.filter(k => typeof k === "string").join(" ");
-      out.push(toEntry(anchor.attrs.href, textOf(anchor), meta));
+      // A <br> divides the machine-read half from the excerpt.
+      const cut = kids.findIndex(
+        k => k && typeof k === "object" && k.tag === "br");
+      const head = cut === -1 ? kids : kids.slice(0, cut);
+      const tail = cut === -1 ? [] : kids.slice(cut + 1);
+
+      out.push(toEntry(
+        anchor.attrs.href,
+        textOf(anchor),
+        head.filter(k => typeof k === "string").join(" "),
+        tail.map(textOf).join(" ")
+      ));
       continue;
     }
     if (n.tag === "a" && n.attrs && n.attrs.href) {
@@ -563,7 +587,8 @@ async function say(text, cls) {
 function matches(e) {
   if (active && !e.cats.some(c => c.toLowerCase() === active)) return false;
   if (!query) return true;
-  return (e.title + " " + e.cats.join(" ")).toLowerCase().includes(query);
+  return (e.title + " " + e.cats.join(" ") + " " + e.excerpt)
+    .toLowerCase().includes(query);
 }
 
 /* ---------- views ---------- */
@@ -610,10 +635,13 @@ function paint() {
     }
     li.appendChild(a);
 
+    if (e.excerpt) li.appendChild(el("p", "excerpt", e.excerpt));
+
     const tags = shown(e);
-    if (e.date || tags.length) {
+    if (e.date || e.minutes || tags.length) {
       const row = el("div", "tags");
       if (e.date) row.appendChild(el("span", "date", fmtDate(e.date)));
+      if (e.minutes) row.appendChild(el("span", "date", e.minutes + " min"));
       for (const c of tags) {
         const b = el("button", "tag" + (active === c.toLowerCase() ? " on" : ""), c);
         b.type = "button";
@@ -667,6 +695,7 @@ async function showArticle(path) {
     const bits = [];
     if (page.author_name) bits.push(page.author_name);
     if (entry && entry.date) bits.push(fmtDate(entry.date));
+    if (entry && entry.minutes) bits.push(entry.minutes + " min");
     if (typeof page.views === "number") bits.push(page.views + " views");
 
     line.append(bits.join(" · ") + (bits.length ? " · " : ""));

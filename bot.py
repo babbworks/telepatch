@@ -601,6 +601,20 @@ def split_post(message):
     return title, categories, content
 
 
+def node_text(node):
+    """
+    Flatten a Telegraph node back to plain text.
+    """
+
+    if isinstance(node, str):
+        return node
+
+    if not isinstance(node, dict):
+        return ""
+
+    return "".join(node_text(child) for child in node.get("children", []))
+
+
 def page_categories(content):
     """
     Pull categories back out of a fetched page - the inverse of split_post.
@@ -614,14 +628,65 @@ def page_categories(content):
         if node.get("tag") != "aside":
             continue
 
-        text = "".join(
-            child for child in node.get("children", [])
-            if isinstance(child, str)
-        )
+        text = node_text(node)
 
         return [item.strip() for item in text.split(",") if item.strip()]
 
     return []
+
+
+# Roughly the pace of unhurried reading. Only ever shown rounded to minutes,
+# so the exact figure matters less than being in the right neighbourhood.
+WORDS_PER_MINUTE = 200
+
+EXCERPT_LIMIT = 180
+
+
+def page_words(content):
+    """
+    Word count for the whole article, categories and captions included -
+    the difference is well below the rounding.
+    """
+
+    return len(" ".join(node_text(n) for n in content or []).split())
+
+
+def page_excerpt(content, limit=EXCERPT_LIMIT):
+    """
+    The opening of the article, for the index.
+
+    Skips the category aside and any leading image, since neither reads as
+    a first sentence, and cuts on a word boundary.
+    """
+
+    parts = []
+    total = 0
+
+    for node in content or []:
+
+        if not isinstance(node, dict):
+            continue
+
+        if node.get("tag") in ("aside", "figure"):
+            continue
+
+        text = " ".join(node_text(node).split())
+
+        if not text:
+            continue
+
+        parts.append(text)
+        total += len(text)
+
+        if total > limit:
+            break
+
+    text = " ".join(parts)
+
+    if len(text) <= limit:
+        return text
+
+    return text[:limit].rsplit(" ", 1)[0].rstrip(",.;:—– ") + "…"
 
 
 # -----------------------
@@ -1470,15 +1535,24 @@ def build_index(token, master_path=None, known_dates=None):
             # A page that will not load simply gets no categories.
             full = {}
 
+        content = full.get("content")
+        categories = page_categories(content)
+        is_nav = NAV_CATEGORY in [c.lower() for c in categories]
+
+        words = page_words(content)
+
         entries.append(
             {
                 "title": page.get("title") or page["path"],
                 "url": page["url"],
                 "path": page["path"],
-                "categories": page_categories(full.get("content")),
+                "categories": categories,
                 # First time a page is indexed it is dated today, and that
                 # date is carried forward by every later rebuild.
                 "date": known_dates.get(page["path"], today),
+                # Nav pages never appear in the index, so they get neither.
+                "excerpt": "" if is_nav else page_excerpt(content),
+                "minutes": 0 if is_nav else max(1, round(words / WORDS_PER_MINUTE)),
             }
         )
 
@@ -1498,12 +1572,22 @@ def build_index(token, master_path=None, known_dates=None):
             }
         ]
 
+        # Everything before the <br> is machine-read: date, reading time,
+        # categories. Everything after is the excerpt. Both halves still
+        # read as an ordinary sentence on telegra.ph.
         meta = INDEX_SEP + entry["date"]
+
+        if entry["minutes"]:
+            meta += f" · {entry['minutes']} min"
 
         if entry["categories"]:
             meta += " · " + ", ".join(entry["categories"])
 
         children.append(meta)
+
+        if entry["excerpt"]:
+            children.append({"tag": "br"})
+            children.append(entry["excerpt"])
 
         items.append({"tag": "li", "children": children})
 
