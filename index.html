@@ -203,6 +203,37 @@ main{padding-block-end:6rem;min-height:0;flex:1 0 auto}
 }
 .tag:hover{color:var(--patch)}
 .tag.on{color:var(--lamp)}
+.date{
+  font-family:var(--mono);font-size:.68rem;
+  text-transform:uppercase;letter-spacing:.07em;
+  color:var(--graphite);
+}
+
+/* Inherits the byline's type so it reads as part of the line, not a widget. */
+.share{
+  font:inherit;letter-spacing:inherit;text-transform:inherit;
+  background:none;border:0;padding:0;cursor:pointer;color:var(--patch);
+}
+.share:hover{color:var(--lamp)}
+.share[disabled]{color:var(--graphite);cursor:default}
+
+/* Reading order comes from the master post, so the publisher controls it. */
+.pager{
+  display:flex;justify-content:space-between;gap:2rem;
+  margin:3rem 0 0;padding-top:1.5rem;
+  border-top:1px solid var(--hair);
+}
+.pager a{
+  display:flex;flex-direction:column;gap:.3rem;
+  text-decoration:none;max-width:47%;
+}
+.pager .next{text-align:right;margin-left:auto}
+.pager .dir{
+  font-family:var(--mono);font-size:.65rem;
+  text-transform:uppercase;letter-spacing:.09em;color:var(--graphite);
+}
+.pager .t{font-size:1.02rem;line-height:1.3;color:var(--ink)}
+.pager a:hover .t{color:var(--patch)}
 
 .empty{font-family:var(--sans);font-size:.9rem;color:var(--graphite);padding:2rem 0}
 
@@ -298,6 +329,9 @@ footer a{color:var(--graphite)}
   .intro h1{font-size:2rem}
   .item a{font-size:1.15rem}
   .article h1{font-size:1.75rem}
+  .pager{flex-direction:column;gap:1.5rem}
+  .pager a{max-width:100%}
+  .pager .next{text-align:left;margin-left:0}
 }
 @media (prefers-reduced-motion:reduce){
   *{animation:none!important;transition:none!important}
@@ -398,14 +432,34 @@ function internalPath(href) {
 const textOf = n =>
   typeof n === "string" ? n : (n.children || []).map(textOf).join("");
 
+const MONTHS = ["January","February","March","April","May","June","July",
+  "August","September","October","November","December"];
+
+/* Formatted by hand: `new Date("2026-07-27")` parses as UTC and can render
+   a day early west of Greenwich. */
+function fmtDate(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
+  if (!m) return "";
+  return +m[3] + " " + MONTHS[+m[2] - 1] + " " + m[1];
+}
+
 function toEntry(href, title, meta) {
-  const cats = meta
-    .replace(/^[\s—–\-·|:]+/, "")
-    .split(",").map(s => s.trim()).filter(Boolean);
+  let rest = meta.replace(/^[\s—–\-·|:]+/, "");
+  let date = "";
+
+  const stamp = /^(\d{4}-\d{2}-\d{2})\s*[·•,]?\s*/.exec(rest);
+  if (stamp) {
+    date = stamp[1];
+    rest = rest.slice(stamp[0].length);
+  }
+
+  const cats = rest.split(",").map(s => s.trim()).filter(Boolean);
+
   return {
     title: (title || "").trim() || href,
     url: absolute(href),
     path: internalPath(href),
+    date,
     cats
   };
 }
@@ -557,8 +611,9 @@ function paint() {
     li.appendChild(a);
 
     const tags = shown(e);
-    if (tags.length) {
+    if (e.date || tags.length) {
       const row = el("div", "tags");
+      if (e.date) row.appendChild(el("span", "date", fmtDate(e.date)));
       for (const c of tags) {
         const b = el("button", "tag" + (active === c.toLowerCase() ? " on" : ""), c);
         b.type = "button";
@@ -605,11 +660,23 @@ async function showArticle(path) {
   const art = el("article", "article" + (isPage ? " bare" : ""));
   art.appendChild(el("h1", null, page.title));
 
+  const entry = posts.find(e => e.path === path);
+
   if (!isPage) {
+    const line = el("p", "byline");
     const bits = [];
     if (page.author_name) bits.push(page.author_name);
+    if (entry && entry.date) bits.push(fmtDate(entry.date));
     if (typeof page.views === "number") bits.push(page.views + " views");
-    if (bits.length) art.appendChild(el("p", "byline", bits.join(" · ")));
+
+    line.append(bits.join(" · ") + (bits.length ? " · " : ""));
+
+    const share = el("button", "share", "Share");
+    share.type = "button";
+    share.addEventListener("click", () => sharePage(page.title, share));
+    line.appendChild(share);
+
+    art.appendChild(line);
   }
 
   const visible = isPage ? [] : tags.filter(c => c.toLowerCase() !== "nav");
@@ -631,6 +698,29 @@ async function showArticle(path) {
   renderNodes(nodes, body, master);
   art.appendChild(body);
 
+  if (!isPage && entry) {
+    const i = posts.indexOf(entry);
+    const prev = posts[i - 1], next = posts[i + 1];
+
+    if ((prev && prev.path) || (next && next.path)) {
+      const pager = el("nav", "pager");
+      pager.setAttribute("aria-label", "More from this publication");
+
+      const cell = (e, cls, dir) => {
+        const a = el("a", cls);
+        a.href = link(master, e.path);
+        a.append(el("span", "dir", dir), el("span", "t", e.title));
+        return a;
+      };
+
+      pager.appendChild(prev && prev.path
+        ? cell(prev, "prev", "←") : el("span"));
+      if (next && next.path) pager.appendChild(cell(next, "next", "→"));
+
+      art.appendChild(pager);
+    }
+  }
+
   const origin = el("p", "origin");
   const a = el("a", null, "View on telegra.ph");
   a.href = page.url; a.target = "_blank"; a.rel = "noopener noreferrer";
@@ -641,6 +731,43 @@ async function showArticle(path) {
   scrollTo(0, 0);
   syncBar();
   checkAlign();
+}
+
+/* Sharing without a third party: the platform sheet where there is one,
+   the clipboard otherwise. Nothing is loaded, and nothing is counted. */
+async function copyText(text) {
+  if (navigator.clipboard && isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const box = el("textarea");
+  box.value = text;
+  box.setAttribute("readonly", "");
+  box.style.cssText = "position:fixed;opacity:0;pointer-events:none";
+  document.body.appendChild(box);
+  box.select();
+  const ok = document.execCommand("copy");
+  box.remove();
+  if (!ok) throw new Error("copy refused");
+}
+
+function flash(btn, msg) {
+  const was = btn.textContent;
+  btn.textContent = msg;
+  btn.disabled = true;
+  setTimeout(() => { btn.textContent = was; btn.disabled = false; }, 1800);
+}
+
+async function sharePage(title, btn) {
+  const url = location.href;
+  try {
+    if (navigator.share) { await navigator.share({ title, url }); return; }
+    await copyText(url);
+    flash(btn, "Link copied");
+  } catch (err) {
+    if (err && err.name === "AbortError") return;
+    flash(btn, "Copy the address bar");
+  }
 }
 
 function backLink() {

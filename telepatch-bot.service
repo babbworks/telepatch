@@ -1,0 +1,45 @@
+# Telepatch bot as a systemd service.
+#
+#   sudo cp telepatch-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now telepatch-bot
+#   journalctl -u telepatch-bot -f
+#
+# Assumes the repo at /opt/telepatch, a venv at /opt/telepatch/.venv, and a
+# .env alongside them. Adjust paths and User to taste.
+
+[Unit]
+Description=Telepatch - Telegram to Telegraph publishing bridge
+Documentation=https://github.com/babbworks/telepatch
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=telepatch
+Group=telepatch
+WorkingDirectory=/opt/telepatch
+EnvironmentFile=/opt/telepatch/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/telepatch/.venv/bin/python /opt/telepatch/bot.py
+
+# Long polling dials out to api.telegram.org. A dropped connection should
+# reconnect rather than end the service.
+Restart=always
+RestartSec=5
+
+# The bot writes nothing and needs nothing, so give it nothing.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

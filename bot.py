@@ -1,0 +1,1876 @@
+#!/usr/bin/env python3
+
+"""
+Telepatch - a pass-through bridge between Telegram and Telegraph.
+
+The bot stores nothing. A Telegraph access_token is the entire identity,
+so it is round-tripped through Telegram's own message payloads:
+
+  - deep link      t.me/<bot>?start=<token>     -> opens the manage menu
+  - callback_data  "<action>:<token>"           -> 62 of the allowed 64 bytes
+  - ForceReply     token hidden in a text_link  -> recovered from the reply
+
+There is no database, no file written, no persistence layer, and nothing
+kept in memory between updates. See /privacy and the notes in main().
+"""
+
+import asyncio
+import json
+import logging
+import os
+import re
+from datetime import date
+from html.parser import HTMLParser
+from urllib.parse import parse_qsl, quote, urlencode
+
+import requests
+
+from dotenv import load_dotenv
+
+from telegram import (
+    ForceReply,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    MessageEntity,
+    Update,
+)
+from telegram.constants import ParseMode
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
+
+
+load_dotenv()
+
+TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
+
+TELEGRAPH_API = "https://api.telegra.ph"
+
+SOURCE_URL = "https://github.com/babbworks/telepatch"
+
+# The static site that renders a master post. The path after the hash is a
+# Telegraph page path, so no credential ever appears in a shared URL.
+SITE_URL = os.environ.get("SITE_URL", "https://babbworks.github.io/telepatch/")
+
+# Separates a title from its categories in the generated master post. Chosen
+# so the master post still reads naturally on telegra.ph.
+INDEX_SEP = " — "
+
+# A page tagged with this becomes a top-bar link on the site instead of an
+# index entry, and the word itself is hidden when categories are displayed.
+NAV_CATEGORY = "nav"
+
+# Ceiling on how many pages /site will read, to bound the rebuild.
+INDEX_LIMIT = 200
+
+
+# Carrier URL for the hidden token in ForceReply prompts. Never visited -
+# it exists only so the token rides along as a message entity.
+CARRIER = "https://telepat.ch/t"
+
+# Telegraph field limits, straight from the API docs.
+LIMITS = {
+    "short_name": 32,
+    "author_name": 128,
+    "author_url": 512,
+}
+
+FIELD_LABELS = {
+    "short_name": "short name",
+    "author_name": "author name",
+    "author_url": "author URL",
+}
+
+# Single-letter action codes. "<action>:<token>" is 62 bytes and
+# callback_data allows 64, so these cannot grow to two letters.
+ACTION_FIELDS = {
+    "s": "short_name",
+    "a": "author_name",
+    "u": "author_url",
+}
+
+TITLE_LIMIT = 256
+
+# Tags Telegraph accepts in page content. Anything else is unwrapped and
+# only its children survive.
+TELEGRAPH_TAGS = {
+    "a", "aside", "b", "blockquote", "br", "code", "em", "figcaption",
+    "figure", "h3", "h4", "hr", "i", "iframe", "img", "li", "ol", "p",
+    "pre", "s", "strong", "u", "ul", "video",
+}
+
+
+# -----------------------
+# Helpers
+# -----------------------
+
+def normalize_url(url):
+    """
+    Ensure URLs include http:// or https://
+    """
+
+    if not url:
+        return None
+
+    url = url.strip()
+
+    if not url:
+        return None
+
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+
+    return url
+
+
+def is_clear(value):
+    """
+    Telegraph clears a field when sent an empty string. Let the user ask
+    for that explicitly, since a ForceReply cannot be answered with nothing.
+    """
+
+    return value.strip().lower() in {"-", "none", "clear", "blank"}
+
+
+def telegraph_path(text):
+    """
+    Reduce a telegra.ph URL to the path Telegraph's public endpoints want.
+    Accepts a full URL or a bare path.
+    """
+
+    text = text.strip().split("?")[0].split("#")[0].rstrip("/")
+
+    if not text:
+        return None
+
+    return text.rsplit("/", 1)[-1] or None
+
+
+def carrier_link(field, token="", **extras):
+    """
+    A one-glyph link whose href secretly carries the field being edited, the
+    access token, and anything else the next step needs. The reply handler
+    reads it back out of the entity.
+
+    Unlike callback_data this has no length limit, which is what makes a
+    per-post byline possible without remembering anything.
+    """
+
+    query = f"?{urlencode(extras)}" if extras else ""
+
+    return f'<a href="{CARRIER}#{field}:{token}{query}">⁠·</a>'
+
+
+def read_carrier(message):
+    """
+    Recover (field, token, extras) from the message this reply is answering.
+    Returns (None, None, {}) when the reply is not to one of our prompts.
+    """
+
+    source = message.reply_to_message
+
+    if not source:
+        return None, None, {}
+
+    for entity in source.entities or []:
+
+        if entity.type != MessageEntity.TEXT_LINK:
+            continue
+
+        if not entity.url or not entity.url.startswith(CARRIER):
+            continue
+
+        head, _, query = entity.url.partition("#")[2].partition("?")
+
+        field, _, token = head.partition(":")
+
+        # keep_blank_values matters: an empty author URL is a real value,
+        # not an absent one.
+        return field, token, dict(parse_qsl(query, keep_blank_values=True))
+
+    return None, None, {}
+
+
+# A Telegraph access token is 60 characters. Loose enough to survive a
+# change of alphabet, tight enough not to match ordinary prose.
+TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{60}")
+
+
+def find_token(message):
+    """
+    Recover a token from the message this one replies to, so the user never
+    has to paste it.
+
+    The identity card carries the token three ways - as a code span, inside
+    the deep-link button, and as plain text - so replying to it with any
+    command is enough. Checked in order of confidence.
+    """
+
+    source = getattr(message, "reply_to_message", None)
+
+    if not source:
+        return None
+
+    markup = getattr(source, "reply_markup", None)
+
+    if markup:
+        for row in markup.inline_keyboard:
+            for button in row:
+
+                if not button.url or "?start=" not in button.url:
+                    continue
+
+                candidate = button.url.split("?start=", 1)[1]
+
+                if TOKEN_RE.fullmatch(candidate):
+                    return candidate
+
+    for entity in source.entities or []:
+
+        if entity.type != MessageEntity.TEXT_LINK or not entity.url:
+            continue
+
+        if entity.url.startswith(CARRIER):
+
+            token = entity.url.partition("#")[2].partition(":")[2]
+
+            if token:
+                return token
+
+        if "?start=" in entity.url:
+
+            candidate = entity.url.split("?start=", 1)[1]
+
+            if TOKEN_RE.fullmatch(candidate):
+                return candidate
+
+    found = TOKEN_RE.search(source.text or "")
+
+    return found.group(0) if found else None
+
+
+def token_hint(command):
+    """
+    Shown when a command needs a token and none could be recovered. Points
+    at the reply route first, since pasting is the thing to avoid.
+    """
+
+    return (
+        "Reply to your pinned identity message with "
+        f"<code>{command}</code> and Telepatch will pick up the token "
+        "from it.\n\n"
+        "You can also open it with the <b>Manage this identity</b> button "
+        f"on that message, or paste it directly: <code>{command} &lt;token&gt;</code>"
+    )
+
+
+# -----------------------
+# Telegraph API
+# -----------------------
+
+def telegraph(method, **params):
+    """
+    Every Telegraph method is a flat POST returning {ok, result|error}.
+    """
+
+    response = requests.post(
+        f"{TELEGRAPH_API}/{method}",
+        data={k: v for k, v in params.items() if v is not None},
+        timeout=10,
+    )
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    if not data.get("ok"):
+        raise RuntimeError(data.get("error", "unknown Telegraph error"))
+
+    return data["result"]
+
+
+def get_account_info(access_token):
+    """
+    Note for publishing: createPage does NOT inherit the account's
+    author_name / author_url. Only the telegra.ph web editor reads those.
+    Any publish path must call this first and forward both explicitly,
+    or the article renders with an empty byline and just a date.
+    """
+
+    return telegraph(
+        "getAccountInfo",
+        access_token=access_token,
+        fields='["short_name","author_name","author_url","page_count"]',
+    )
+
+
+# -----------------------
+# Content conversion
+# -----------------------
+
+class _NodeBuilder(HTMLParser):
+    """
+    Turn Telegram's own HTML rendering of a message into Telegraph nodes.
+
+    Using message.text_html means the bold, italics, links and code the
+    user typed survive into the article - Telegram has already resolved
+    its entities into markup, so there is no offset arithmetic to get wrong.
+    """
+
+    def __init__(self):
+
+        super().__init__(convert_charrefs=True)
+
+        self.root = []
+        self.stack = [self.root]
+
+    def handle_starttag(self, tag, attrs):
+
+        if tag not in TELEGRAPH_TAGS:
+            # Unsupported wrapper (span, tg-spoiler, tg-emoji): keep the
+            # children, drop the tag, and mirror the stack so the matching
+            # end tag still pops something.
+            self.stack.append(self.stack[-1])
+            return
+
+        node = {"tag": tag, "children": []}
+
+        href = dict(attrs).get("href")
+
+        if tag == "a" and href:
+            node["attrs"] = {"href": href}
+
+        self.stack[-1].append(node)
+        self.stack.append(node["children"])
+
+    def handle_startendtag(self, tag, attrs):
+
+        if tag in TELEGRAPH_TAGS:
+            self.stack[-1].append({"tag": tag})
+
+    def handle_endtag(self, tag):
+
+        if len(self.stack) > 1:
+            self.stack.pop()
+
+    def handle_data(self, data):
+
+        self.stack[-1].append(data)
+
+
+# Telegraph's own /upload endpoint is closed to third parties (HTTP 400),
+# so images have to be hotlinked from wherever they already live. Telegraph
+# stores whatever src it is given and never validates it.
+IMAGE_RE = re.compile(r"\.(jpe?g|png|gif|webp)(?:[?#]|$)", re.I)
+
+TELEGRAPH_FILE = "telegra.ph/file/"
+
+EMBED_PROVIDERS = (
+    (re.compile(r"^https?://(?:www\.)?(?:youtube\.com|youtu\.be)/", re.I), "youtube"),
+    (re.compile(r"^https?://(?:www\.)?vimeo\.com/", re.I), "vimeo"),
+    (re.compile(r"^https?://(?:www\.)?(?:twitter\.com|x\.com)/", re.I), "twitter"),
+)
+
+
+def media_node(url, caption):
+    """
+    Build a <figure> for an image or a supported embed, or None if the URL
+    is just an ordinary link that should stay inline.
+    """
+
+    if IMAGE_RE.search(url) or TELEGRAPH_FILE in url:
+        inner = {"tag": "img", "attrs": {"src": url}}
+
+    else:
+        for pattern, provider in EMBED_PROVIDERS:
+
+            if not pattern.match(url):
+                continue
+
+            # Telegraph's embed resolver predates the rename.
+            target = url.replace("//x.com/", "//twitter.com/")
+
+            inner = {
+                "tag": "iframe",
+                "attrs": {
+                    "src": f"/embed/{provider}?url={quote(target, safe='')}"
+                },
+            }
+            break
+
+        else:
+            return None
+
+    children = [inner]
+
+    if caption:
+        children.append({"tag": "figcaption", "children": caption})
+
+    return {"tag": "figure", "children": children}
+
+
+def leading_url(para):
+    """
+    Return (url, caption_nodes) when a paragraph opens with a bare URL.
+
+    Telegram auto-links URLs, so the first node is usually an <a>. Anything
+    after the URL on that line becomes the caption, which makes the natural
+    gesture - paste a link, type a few words - do the obvious thing.
+    """
+
+    if not para:
+        return None, []
+
+    first = para[0]
+
+    if isinstance(first, dict):
+
+        if first.get("tag") != "a":
+            return None, []
+
+        return first.get("attrs", {}).get("href"), list(para[1:])
+
+    stripped = first.lstrip()
+
+    if not stripped.startswith(("http://", "https://")):
+        return None, []
+
+    url, _, rest = stripped.partition(" ")
+
+    caption = ([rest] if rest.strip() else []) + list(para[1:])
+
+    return url, caption
+
+
+def as_media(para):
+    """
+    Promote a paragraph to a figure when it is just a media URL.
+    """
+
+    url, caption = leading_url(para)
+
+    if not url:
+        return None
+
+    while caption and isinstance(caption[0], str) and not caption[0].strip():
+        caption.pop(0)
+
+    if caption and isinstance(caption[0], str):
+        caption[0] = caption[0].lstrip(" -–—:")
+
+    return media_node(url, caption)
+
+
+def to_content(text_html):
+    """
+    Build a Telegraph content array, breaking into paragraphs on blank lines.
+
+    Splitting happens only inside plain text nodes, so a bold run that
+    straddles a blank line simply stays in one paragraph rather than
+    producing broken markup.
+    """
+
+    builder = _NodeBuilder()
+    builder.feed(text_html)
+    # close() flushes anything the parser held back - text ending in a bare
+    # "<" looks like the start of a tag and stays buffered otherwise.
+    builder.close()
+
+    paragraphs = []
+    current = []
+
+    for node in builder.root:
+
+        if not isinstance(node, str):
+            current.append(node)
+            continue
+
+        chunks = re.split(r"\n\s*\n", node)
+
+        for index, chunk in enumerate(chunks):
+
+            if index:
+                paragraphs.append(current)
+                current = []
+
+            # Single newlines stay as line breaks within the paragraph.
+            lines = chunk.split("\n")
+
+            for line_index, line in enumerate(lines):
+
+                if line_index:
+                    current.append({"tag": "br"})
+
+                if line:
+                    current.append(line)
+
+    paragraphs.append(current)
+
+    content = []
+
+    for para in paragraphs:
+
+        if not any(not isinstance(n, str) or n.strip() for n in para):
+            continue
+
+        content.append(as_media(para) or {"tag": "p", "children": para})
+
+    return content or [{"tag": "p", "children": [""]}]
+
+
+def parse_categories(line):
+    """
+    Read line two as a category list, or return None to treat it as body.
+
+    Deliberately narrow so ordinary prose is never swallowed: no sentence
+    punctuation, and either one single word or a comma-separated list whose
+    items are short.
+    """
+
+    line = (line or "").strip()
+
+    if not line or len(line) > 80:
+        return None
+
+    if any(mark in line for mark in ".!?:;"):
+        return None
+
+    items = [item.strip() for item in line.split(",")]
+
+    if any(not item for item in items):
+        return None
+
+    if len(items) == 1 and len(items[0].split()) > 1:
+        return None
+
+    if any(len(item.split()) > 3 for item in items):
+        return None
+
+    return items
+
+
+def split_post(message):
+    """
+    Line one is the title. Line two is categories when it looks like a list.
+    Everything after is the body.
+
+    Categories are stored as an <aside> at the top of the page, which
+    Telegraph renders as a centred italic subtitle and which the website can
+    read straight back out. Returns (title, categories, content).
+    """
+
+    raw = (message.text or "").strip()
+
+    if not raw:
+        raise ValueError("Send a title on the first line, then the body.")
+
+    lines = raw.split("\n")
+
+    title = lines[0].strip()
+
+    if not title:
+        raise ValueError("The first line must be the title.")
+
+    if len(title) > TITLE_LIMIT:
+        raise ValueError(f"Title is too long (max {TITLE_LIMIT} characters).")
+
+    categories = parse_categories(lines[1]) if len(lines) > 1 else None
+
+    # text_html has the same line structure as text - tags never add newlines.
+    html_lines = (message.text_html or "").split("\n")
+
+    body_html = "\n".join(html_lines[2:] if categories else html_lines[1:])
+
+    if not body_html.strip():
+        raise ValueError(
+            "That was only a title. Add the body on the lines below it."
+        )
+
+    content = to_content(body_html)
+
+    if categories:
+        content.insert(
+            0, {"tag": "aside", "children": [", ".join(categories)]}
+        )
+
+    return title, categories, content
+
+
+def page_categories(content):
+    """
+    Pull categories back out of a fetched page - the inverse of split_post.
+    """
+
+    for node in content or []:
+
+        if not isinstance(node, dict):
+            continue
+
+        if node.get("tag") != "aside":
+            continue
+
+        text = "".join(
+            child for child in node.get("children", [])
+            if isinstance(child, str)
+        )
+
+        return [item.strip() for item in text.split(",") if item.strip()]
+
+    return []
+
+
+# -----------------------
+# Input parsing
+# -----------------------
+
+def parse_new_fields(text):
+    """
+    Turn one comma-separated message into (short_name, author_name, author_url).
+
+    The user sends everything at once so the bot never has to hold partial
+    state, e.g.  "mypub, Jane Doe, jane.example"
+
+    Commas are strict separators, so names cannot contain them. Only the
+    short name is required. Since short_name is private and an unset
+    author_name publishes a bare date with no byline, the short name is
+    reused as the byline when none is given.
+    """
+
+    parts = [part.strip() for part in text.split(",")]
+
+    if len(parts) > 3:
+        raise ValueError(
+            "Too many commas. Send exactly:\n"
+            "short name, author name, author url\n\n"
+            "Commas cannot appear inside a name."
+        )
+
+    parts += [""] * (3 - len(parts))
+
+    short_name, author_name, author_url = parts
+
+    if not short_name:
+        raise ValueError("A short name is required.")
+
+    for field, value in (
+        ("short_name", short_name),
+        ("author_name", author_name),
+        ("author_url", author_url),
+    ):
+        if len(value) > LIMITS[field]:
+            raise ValueError(
+                f"That {FIELD_LABELS[field]} is too long "
+                f"(max {LIMITS[field]} characters)."
+            )
+
+    # An empty author_name renders as a byline-less page, so fall back to
+    # the short name rather than publishing under nothing.
+    return short_name, author_name or short_name, author_url
+
+
+# -----------------------
+# Views
+# -----------------------
+
+async def send_menu(target, token, note=None):
+    """
+    Read the account and offer one button per writable field. Every button
+    re-supplies the token, so pressing one needs no server-side memory.
+    """
+
+    try:
+        info = get_account_info(token)
+
+    except Exception as error:
+        await target.reply_text(f"That token did not work:\n{error}")
+        return
+
+    # Telegram splits a row's width evenly between its buttons and offers no
+    # width control, so long labels get a row to themselves rather than being
+    # truncated. Short labels pair up.
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("New post", callback_data=f"p:{token}"),
+            InlineKeyboardButton("Post anonymous", callback_data=f"P:{token}"),
+        ],
+        [
+            InlineKeyboardButton(
+                "Post with a different byline", callback_data=f"c:{token}"
+            ),
+        ],
+        [
+            InlineKeyboardButton("My pages", callback_data=f"l:{token}"),
+            InlineKeyboardButton("Build site", callback_data=f"g:{token}"),
+        ],
+        [
+            InlineKeyboardButton("Upload image", callback_data=f"e:{token}"),
+        ],
+        [
+            InlineKeyboardButton("Short name", callback_data=f"s:{token}"),
+            InlineKeyboardButton("Author name", callback_data=f"a:{token}"),
+        ],
+        [
+            InlineKeyboardButton("Author URL", callback_data=f"u:{token}"),
+            InlineKeyboardButton("Revoke token", callback_data=f"r:{token}"),
+        ],
+    ])
+
+    lines = []
+
+    if note:
+        lines += [note, ""]
+
+    lines += [
+        "<b>Your Telepatch identity</b>",
+        "",
+        f"Short name: <b>{info.get('short_name') or '-'}</b> (private)",
+        f"Byline: <b>{info.get('author_name') or '-'}</b>",
+        f"Author URL: <b>{info.get('author_url') or '-'}</b>",
+        f"Published pages: <b>{info.get('page_count', 0)}</b>",
+    ]
+
+    await target.reply_text(
+        "\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        reply_markup=keyboard,
+    )
+
+
+async def prompt_for(message, field, token):
+    """
+    Ask for one value with ForceReply, hiding the token in the prompt itself.
+    """
+
+    label = FIELD_LABELS[field]
+
+    hint = (
+        "This one cannot be empty, and it stays private."
+        if field == "short_name"
+        else "Send <code>-</code> to clear it."
+    )
+
+    await message.reply_text(
+        f"Reply with the new {label}.\n{hint}{carrier_link(field, token)}",
+        parse_mode=ParseMode.HTML,
+        reply_markup=ForceReply(
+            selective=True,
+            input_field_placeholder=f"new {label}",
+        ),
+    )
+
+
+async def prompt_revise(message, token, path):
+    """
+    editPage replaces the whole article, so ask for the whole thing.
+    """
+
+    try:
+        page = telegraph("getPage", path=path, return_content="false")
+
+    except Exception as error:
+        await message.reply_text(f"Could not find that page:\n{error}")
+        return
+
+    await message.reply_text(
+        f"Revising <b>{page.get('title') or path}</b>\n\n"
+        "Reply with the replacement: title on the first line, body below. "
+        "This replaces the whole article - there is no partial edit.\n\n"
+        f"Byline stays as <b>{page.get('author_name') or '(none)'}</b>."
+        + carrier_link("revise", token, path=path),
+        parse_mode=ParseMode.HTML,
+        reply_markup=ForceReply(
+            selective=True,
+            input_field_placeholder="Title, then the body",
+        ),
+    )
+
+
+async def prompt_byline(message, token):
+    """
+    Collect a byline that applies to the next post only. Nothing on the
+    account changes - the values ride to the publish step in the carrier.
+    """
+
+    await message.reply_text(
+        "Reply with the byline for this one post:\n\n"
+        "<code>author name, author url</code>\n\n"
+        "The URL is optional. Your saved byline is not changed."
+        + carrier_link("byline", token),
+        parse_mode=ParseMode.HTML,
+        reply_markup=ForceReply(
+            selective=True,
+            input_field_placeholder="author name, author url",
+        ),
+    )
+
+
+async def prompt_post(message, token, anonymous=False, override=None):
+    """
+    A ForceReply message cannot also carry an inline keyboard, so the
+    browser-authoring link goes inline in the text as a hyperlink.
+    """
+
+    if anonymous:
+        note = "This post will carry <b>no byline</b> - just a date."
+
+    elif override:
+        note = f"Byline for this post: <b>{override[0] or '(none)'}</b>"
+
+    else:
+        note = "This post will carry your saved byline."
+
+    extras = {}
+
+    if override:
+        extras = {"n": override[0], "u": override[1]}
+
+    browser = ""
+
+    try:
+        info = telegraph(
+            "getAccountInfo", access_token=token, fields='["auth_url"]'
+        )
+        browser = (
+            "\n\nPrefer a real editor? "
+            f'<a href="{info["auth_url"]}">Write in your browser</a> '
+            "(link works for 5 minutes)."
+        )
+
+    except Exception:
+        # A bad token will surface on publish; do not block composing.
+        pass
+
+    await message.reply_text(
+        "Reply with your post.\n\n"
+        "<b>First line is the title.</b> Everything below it is the body. "
+        "Bold, italics and links you type here are kept.\n\n"
+        "An image URL on its own line becomes a picture - add words after "
+        "it for a caption. YouTube, Vimeo and Twitter links become embeds.\n\n"
+        f"{note}"
+        + carrier_link("anon" if anonymous else "post", token, **extras)
+        + browser,
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+        reply_markup=ForceReply(
+            selective=True,
+            input_field_placeholder="Title, then the body",
+        ),
+    )
+
+
+# -----------------------
+# Commands
+# -----------------------
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Bare /start welcomes. /start <token> is the deep link coming home.
+    """
+
+    if context.args:
+        await send_menu(update.message, context.args[0].strip())
+        return
+
+    await update.message.reply_text(
+        "<b>Welcome to Telepatch.</b>\n\n"
+
+        "/new - create a Telepatch identity\n\n"
+
+        "Once you have one, its message gets pinned in this chat. "
+        "<b>Reply to that pinned message</b> with any of these and the "
+        "token is picked up automatically:\n\n"
+
+        "/post - publish an article\n"
+        "/pages - list what you have published\n"
+        "/revise - rewrite a post (reply to its Published message)\n"
+        "/site - build your public website index\n"
+        "/manage - change your byline or revoke\n\n"
+
+        "No identity needed at all:\n"
+        "/views &lt;url&gt; - title, byline and views for any Telegraph page\n\n"
+
+        "/privacy - what this bot keeps (nothing)\n"
+        "/about - about Telepatch",
+
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    await update.message.reply_text(
+        "Telepatch is a lightweight publishing bridge between Telegram, "
+        "Telegraph, and the open web.\n\n"
+        f"Source: {SOURCE_URL}"
+    )
+
+
+async def privacy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Claims a skeptic can check against the source, not vague reassurance.
+    """
+
+    await update.message.reply_text(
+        "<b>What Telepatch keeps: nothing.</b>\n\n"
+
+        "There is no database and no file is ever written. The bot holds "
+        "nothing in memory between messages.\n\n"
+
+        "Your Telegraph access token is your identity. Telepatch never "
+        "stores it. It travels back and forth inside the Telegram messages "
+        "themselves - in the button you press and the message you reply to. "
+        "That is why every action starts from a message in this chat: there "
+        "is nowhere else for it to come from.\n\n"
+
+        "<b>What this does not protect you from</b>\n"
+        "Telegram sees every message here, including your token, and keeps "
+        "your chat history. Telegraph sees whatever you publish. Telepatch "
+        "cannot change either of those.\n\n"
+
+        "<b>Your short name is private.</b> It never appears on a published "
+        "page - only your byline does, and you can publish with no byline "
+        "at all.\n\n"
+
+        "<b>Images are hotlinked, not copied.</b> Telepatch never receives "
+        "or stores your files. An image URL in a post stays pointed at "
+        "whoever hosts it, which means that host sees the IP address of "
+        "everyone who reads your article. Uploading through the Telegraph "
+        "editor instead keeps it on telegra.ph.\n\n"
+
+        "/views needs no token at all, so you can use it without handing "
+        "this bot any credential.\n\n"
+
+        f"Read the code: {SOURCE_URL}",
+
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+def token_for(update, context):
+    """
+    Prefer a pasted token, fall back to whatever the reply points at.
+    """
+
+    if context.args:
+        return context.args[0].strip()
+
+    return find_token(update.message)
+
+
+async def manage(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    token = token_for(update, context)
+
+    if not token:
+        await update.message.reply_text(
+            token_hint("/manage"),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    await send_menu(update.message, token)
+
+
+async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    token = token_for(update, context)
+
+    if not token:
+        await update.message.reply_text(
+            token_hint("/post"),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    await prompt_post(update.message, token)
+
+
+async def new(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Accepts everything inline (/new a, b, c) or prompts for one comma line.
+    """
+
+    if context.args:
+        await create_identity(update.message, " ".join(context.args))
+        return
+
+    await update.message.reply_text(
+        "Send all three at once, separated by commas:\n\n"
+        "<code>short name, author name, author url</code>\n\n"
+        "Example:\n"
+        "<code>mypub, Jane Doe, jane.example</code>\n\n"
+        "Only the short name is required, and it stays private. "
+        "The author name is the byline shown on your articles - "
+        "leave it out and the short name is used instead."
+        + carrier_link("new"),
+        parse_mode=ParseMode.HTML,
+        reply_markup=ForceReply(
+            selective=True,
+            input_field_placeholder="short name, author, url",
+        ),
+    )
+
+
+async def site(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /site builds the master post. Replying to a previous Site message finds
+    it and rewrites it in place; otherwise a new one is created.
+
+    Any words after the command become the site title, which otherwise
+    defaults to the short name - the one use that makes it public, and only
+    because the publisher chose to.
+    """
+
+    token = token_for(update, context)
+
+    if not token:
+        await update.message.reply_text(
+            token_hint("/site"),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    _, _, extras = read_carrier(update.message)
+
+    title = " ".join(context.args).strip() if context.args else None
+
+    if title and TOKEN_RE.fullmatch(title):
+        # The token was pasted as the argument, not a title.
+        title = None
+
+    await rebuild_site(
+        update.message,
+        token,
+        master_path=extras.get("site"),
+        title=title,
+    )
+
+
+async def revise(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Path comes from an argument, from the carrier on a Published message,
+    or from any telegra.ph URL in the message being replied to.
+    """
+
+    token = token_for(update, context)
+
+    path = telegraph_path(" ".join(context.args)) if context.args else None
+
+    source = update.message.reply_to_message
+
+    if not path and source:
+
+        _, _, extras = read_carrier(update.message)
+
+        path = extras.get("path")
+
+        if not path:
+            found = re.search(r"https?://telegra\.ph/\S+", source.text or "")
+            path = telegraph_path(found.group(0)) if found else None
+
+    if not token or not path:
+        await update.message.reply_text(
+            "Reply to a <b>Published</b> message with <code>/revise</code> "
+            "and Telepatch finds both the page and the token.\n\n"
+            "Otherwise: reply to your pinned identity with "
+            "<code>/revise &lt;telegra.ph url&gt;</code>.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    await prompt_revise(update.message, token, path)
+
+
+async def pages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    token = token_for(update, context)
+
+    if not token:
+        await update.message.reply_text(
+            token_hint("/pages"),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    await send_pages(update.message, token)
+
+
+async def views(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Public endpoint - no access token involved at any point. Accepts a URL
+    as an argument, or a reply to any message containing one.
+
+    getPage carries the view count as well as the title and byline, so this
+    single command covers both "how is it doing" and "what is public here".
+    """
+
+    text = " ".join(context.args) if context.args else ""
+
+    if not text and update.message.reply_to_message:
+        text = update.message.reply_to_message.text or ""
+
+    found = re.search(r"https?://telegra\.ph/\S+", text)
+
+    path = telegraph_path(found.group(0) if found else text)
+
+    if not path:
+        await update.message.reply_text(
+            "Send <code>/views &lt;telegra.ph url&gt;</code>, or reply to a "
+            "message containing one.\n\n"
+            "No token needed - this reads only what is already public.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    try:
+        page = telegraph("getPage", path=path, return_content="false")
+
+    except Exception as error:
+        await update.message.reply_text(f"Could not read that page:\n{error}")
+        return
+
+    await update.message.reply_text(
+        f"<b>{page.get('title') or '-'}</b>\n"
+        f"Byline: {page.get('author_name') or '(none)'}\n"
+        f"Views: <b>{page.get('views', 0)}</b>\n\n"
+        f"{page.get('url')}",
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+# -----------------------
+# Actions
+# -----------------------
+
+async def create_identity(message, text):
+    """
+    Create the account and hand back a deep link that reopens the menu.
+    """
+
+    try:
+        short_name, author_name, author_url = parse_new_fields(text)
+
+    except ValueError as error:
+        await message.reply_text(str(error))
+        return
+
+    try:
+        account = telegraph(
+            "createAccount",
+            short_name=short_name,
+            author_name=author_name,
+            author_url=normalize_url(author_url),
+        )
+
+    except Exception as error:
+        await message.reply_text(f"Unable to create identity:\n{error}")
+        return
+
+    await send_token(message, account["access_token"], account)
+
+
+async def send_token(message, token, info=None, revoked=False):
+    """
+    Hand a token back with a deep link that reopens the manage menu.
+    This message is the only copy that will ever exist.
+    """
+
+    me = await message.get_bot().get_me()
+
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "Manage this identity",
+            url=f"https://t.me/{me.username}?start={token}",
+        )
+    ]])
+
+    lines = (
+        ["<b>Token revoked. Here is your new one.</b>", ""]
+        if revoked
+        else ["<b>Your Telepatch identity is ready.</b>", ""]
+    )
+
+    if info:
+        lines += [
+            f"Short name: <b>{info.get('short_name') or '-'}</b> (private)",
+            f"Byline: <b>{info.get('author_name') or '-'}</b>",
+            f"Author URL: <b>{info.get('author_url') or '-'}</b>",
+            "",
+        ]
+
+    lines += [
+        "Access token:",
+        f"<code>{token}</code>",
+        "",
+        "This message is the only copy of your token. Telepatch does not "
+        "keep it - without it the identity cannot be recovered, so save it "
+        "somewhere safe.",
+        "",
+        "You will not need to paste it. <b>Reply to this message</b> with "
+        "/post, /pages or /manage and Telepatch reads the token from it.",
+    ]
+
+    sent = await message.reply_text(
+        "\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        reply_markup=keyboard,
+    )
+
+    # Pin it so the identity stays reachable without scrolling. Statelessness
+    # means the token has to live somewhere findable, and Telegram's pin list
+    # is exactly that - owned by the user, not the bot. Several identities
+    # simply produce several pins, so nothing is unpinned here.
+    try:
+        await sent.pin(disable_notification=True)
+
+    except Exception:
+        # Pinning needs rights the bot may not have outside a private chat.
+        pass
+
+
+async def send_pages(target, token):
+
+    try:
+        result = telegraph(
+            "getPageList",
+            access_token=token,
+            limit=50,
+        )
+
+    except Exception as error:
+        await target.reply_text(f"That token did not work:\n{error}")
+        return
+
+    items = result.get("pages", [])
+
+    if not items:
+        await target.reply_text("Nothing published from this identity yet.")
+        return
+
+    lines = [f"<b>{result.get('total_count', len(items))} published</b>", ""]
+
+    for page in items:
+        lines.append(
+            f'• <a href="{page["url"]}">{page.get("title") or page["path"]}</a>'
+            f' - {page.get("views", 0)} views'
+        )
+
+    await target.reply_text(
+        "\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+async def send_editor_link(target, token):
+    """
+    Telegraph refuses uploads from anywhere but its own editor session, so
+    the only way to get a telegra.ph-hosted image is to log the user in.
+    auth_url does exactly that, and expires after five minutes.
+    """
+
+    try:
+        info = telegraph(
+            "getAccountInfo",
+            access_token=token,
+            fields='["auth_url"]',
+        )
+
+    except Exception as error:
+        await target.reply_text(f"That token did not work:\n{error}")
+        return
+
+    await target.reply_text(
+        "<b>To use a Telegraph-hosted image</b>\n\n"
+        "Telegraph only accepts uploads from its own editor, so open the "
+        "link below, drag your image into the page, then copy the "
+        "<code>telegra.ph/file/…</code> address it becomes.\n\n"
+        "Paste that address on its own line in your post and Telepatch "
+        "turns it into an image.\n\n"
+        "<b>Best on a laptop</b> - the editor wants drag and drop, and is "
+        "awkward on a phone.\n\n"
+        "<b>This link expires in 5 minutes</b> and signs you in as this "
+        "identity, so do not forward it.\n\n"
+        f"{info.get('auth_url')}",
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Explain rather than fail silently. Refusing to host the file is a
+    feature here, so say so.
+    """
+
+    await update.message.reply_text(
+        "<b>Telepatch cannot host images</b>, and does not keep your files.\n\n"
+        "Telegraph only accepts uploads from its own editor, and Telegram's "
+        "file links cannot be used publicly.\n\n"
+        "Two ways to add a picture:\n\n"
+        "1. Open /manage and press <b>Upload image</b> for a link to the "
+        "Telegraph editor, where uploads work (best on a laptop).\n"
+        "2. Paste any image URL on its own line in your post.\n\n"
+        "YouTube, Vimeo and Twitter links on their own line become embeds.",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def publish(message, token, anonymous, override=None):
+    """
+    createPage does not inherit account defaults, so the byline is read
+    and forwarded here - or deliberately withheld when anonymous, or
+    replaced for this page only when an override rode in on the carrier.
+    """
+
+    try:
+        title, categories, content = split_post(message)
+
+    except ValueError as error:
+        await message.reply_text(str(error))
+        return
+
+    author_name = ""
+    author_url = ""
+
+    if anonymous:
+        # Skip the account read entirely so the byline is never even fetched.
+        pass
+
+    elif override is not None:
+        author_name, author_url = override
+
+    else:
+
+        try:
+            info = get_account_info(token)
+
+        except Exception as error:
+            await message.reply_text(f"That token did not work:\n{error}")
+            return
+
+        author_name = info.get("author_name") or info.get("short_name") or ""
+        author_url = info.get("author_url") or ""
+
+    try:
+        page = telegraph(
+            "createPage",
+            access_token=token,
+            title=title,
+            author_name=author_name,
+            author_url=author_url,
+            content=json.dumps(content),
+        )
+
+    except Exception as error:
+        await message.reply_text(f"Could not publish:\n{error}")
+        return
+
+    byline = author_name or "no byline"
+
+    tagline = f" · {', '.join(categories)}" if categories else ""
+
+    # The carrier here means a reply of "/revise" to this message needs no
+    # arguments - both the token and the page path come out of it.
+    await message.reply_text(
+        f"<b>Published.</b> ({byline}{tagline})\n\n{page['url']}\n\n"
+        "Reply to this message with /revise to change it."
+        + carrier_link("page", token, path=page["path"]),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+    await send_menu(message, token)
+
+
+ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def read_index_dates(content):
+    """
+    Recover {path: iso date} from an existing master post.
+
+    Telegraph exposes no publication date, so the master post is where a
+    date first gets written down - and rebuilding must not lose it. The
+    record lives in the publisher's own public page rather than in any
+    store of ours, which keeps the bot stateless while still remembering.
+    """
+
+    dates = {}
+
+    def walk(nodes):
+
+        for node in nodes or []:
+
+            if not isinstance(node, dict):
+                continue
+
+            kids = node.get("children") or []
+
+            anchor = next(
+                (k for k in kids
+                 if isinstance(k, dict) and k.get("tag") == "a"),
+                None,
+            )
+
+            if anchor and (anchor.get("attrs") or {}).get("href"):
+
+                meta = "".join(k for k in kids if isinstance(k, str))
+                found = ISO_DATE.search(meta)
+                path = telegraph_path(anchor["attrs"]["href"])
+
+                if found and path:
+                    dates[path] = found.group(0)
+
+                continue
+
+            walk(kids)
+
+    walk(content)
+
+    return dates
+
+
+def build_index(token, master_path=None, known_dates=None):
+    """
+    Read every page on the account and lay them out as one master post.
+
+    The bot holds the token, so it can enumerate pages the public API will
+    not. Resolving each page's categories here means the website needs a
+    single request instead of one per article.
+
+    Runs in a worker thread - it is a few hundred blocking calls at worst.
+    """
+
+    known_dates = known_dates or {}
+    today = date.today().isoformat()
+
+    listing = telegraph("getPageList", access_token=token, limit=INDEX_LIMIT)
+
+    entries = []
+
+    for page in listing.get("pages", []):
+
+        if page["path"] == master_path:
+            continue
+
+        try:
+            full = telegraph(
+                "getPage", path=page["path"], return_content="true"
+            )
+
+        except Exception:
+            # A page that will not load simply gets no categories.
+            full = {}
+
+        entries.append(
+            {
+                "title": page.get("title") or page["path"],
+                "url": page["url"],
+                "path": page["path"],
+                "categories": page_categories(full.get("content")),
+                # First time a page is indexed it is dated today, and that
+                # date is carried forward by every later rebuild.
+                "date": known_dates.get(page["path"], today),
+            }
+        )
+
+    # getPageList is newest first, so a stable sort by date keeps that order
+    # within a day while putting newer days on top.
+    entries.sort(key=lambda e: e["date"], reverse=True)
+
+    items = []
+
+    for entry in entries:
+
+        children = [
+            {
+                "tag": "a",
+                "attrs": {"href": entry["url"]},
+                "children": [entry["title"]],
+            }
+        ]
+
+        meta = INDEX_SEP + entry["date"]
+
+        if entry["categories"]:
+            meta += " · " + ", ".join(entry["categories"])
+
+        children.append(meta)
+
+        items.append({"tag": "li", "children": children})
+
+    content = [{"tag": "ul", "children": items}] if items else [
+        {"tag": "p", "children": ["Nothing published yet."]}
+    ]
+
+    return entries, content
+
+
+async def rebuild_site(message, token, master_path=None, title=None):
+    """
+    Create the master post, or rewrite it in place when one already exists.
+    """
+
+    notice = await message.reply_text(
+        "Reading your pages…" if master_path else "Building your index…"
+    )
+
+    try:
+        info = get_account_info(token)
+
+    except Exception as error:
+        await notice.edit_text(f"That token did not work:\n{error}")
+        return
+
+    site_title = title or info.get("short_name") or "Telepatch"
+
+    # Read the dates already recorded before overwriting the page they live on.
+    known_dates = {}
+
+    if master_path:
+        try:
+            known_dates = read_index_dates(
+                telegraph(
+                    "getPage", path=master_path, return_content="true"
+                ).get("content")
+            )
+
+        except Exception:
+            pass
+
+    try:
+        entries, content = await asyncio.to_thread(
+            build_index, token, master_path, known_dates
+        )
+
+    except Exception as error:
+        await notice.edit_text(f"Could not read your pages:\n{error}")
+        return
+
+    byline = info.get("author_name") or info.get("short_name") or ""
+
+    try:
+        if master_path:
+            page = telegraph(
+                "editPage",
+                access_token=token,
+                path=master_path,
+                title=site_title,
+                content=json.dumps(content),
+                author_name=byline,
+                author_url=info.get("author_url") or "",
+            )
+
+        else:
+            page = telegraph(
+                "createPage",
+                access_token=token,
+                title=site_title,
+                content=json.dumps(content),
+                author_name=byline,
+                author_url=info.get("author_url") or "",
+            )
+
+    except Exception as error:
+        await notice.edit_text(f"Could not save the index:\n{error}")
+        return
+
+    nav = sum(1 for e in entries if NAV_CATEGORY in
+              [c.lower() for c in e["categories"]])
+
+    tags = sorted({
+        c for e in entries for c in e["categories"]
+        if c.lower() != NAV_CATEGORY
+    })
+
+    await notice.delete()
+
+    sent = await message.reply_text(
+        f"<b>{site_title}</b> is live.\n\n"
+        f"{SITE_URL}#{page['path']}\n\n"
+        f"{len(entries) - nav} posts · {nav} nav pages · "
+        f"{len(tags)} categories\n"
+        + (f"{', '.join(tags)}\n" if tags else "")
+        + "\nAnyone can open that link - it carries no token.\n"
+        "Reply to this message with /site after publishing to refresh it."
+        + carrier_link("page", token, site=page["path"]),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+    try:
+        await sent.pin(disable_notification=True)
+
+    except Exception:
+        pass
+
+
+async def revise_page(message, token, path):
+    """
+    editPage clears author_name and author_url when they are not sent, so
+    the current byline is read back and re-supplied. Omitting it would
+    silently strip the byline off an existing article.
+    """
+
+    try:
+        title, categories, content = split_post(message)
+
+    except ValueError as error:
+        await message.reply_text(str(error))
+        return
+
+    try:
+        current = telegraph("getPage", path=path, return_content="false")
+
+    except Exception as error:
+        await message.reply_text(f"Could not find that page:\n{error}")
+        return
+
+    try:
+        page = telegraph(
+            "editPage",
+            access_token=token,
+            path=path,
+            title=title,
+            content=json.dumps(content),
+            author_name=current.get("author_name") or "",
+            author_url=current.get("author_url") or "",
+        )
+
+    except Exception as error:
+        await message.reply_text(f"Could not update:\n{error}")
+        return
+
+    await message.reply_text(
+        f"<b>Updated.</b>\n\n{page['url']}\n\n"
+        "Reply to this message with /revise to change it again."
+        + carrier_link("page", token, path=path),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+# -----------------------
+# Buttons and replies
+# -----------------------
+
+async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+
+    await query.answer()
+
+    action, _, token = query.data.partition(":")
+
+    if action in ACTION_FIELDS:
+        await prompt_for(query.message, ACTION_FIELDS[action], token)
+        return
+
+    if action == "p":
+        await prompt_post(query.message, token)
+        return
+
+    if action == "P":
+        await prompt_post(query.message, token, anonymous=True)
+        return
+
+    if action == "c":
+        await prompt_byline(query.message, token)
+        return
+
+    if action == "l":
+        await send_pages(query.message, token)
+        return
+
+    if action == "e":
+        await send_editor_link(query.message, token)
+        return
+
+    if action == "g":
+        await rebuild_site(query.message, token)
+        return
+
+    if action == "r":
+
+        await query.message.reply_text(
+            "Revoking invalidates this token and issues a new one. "
+            "Any copy you have saved stops working.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("Revoke", callback_data=f"R:{token}"),
+                InlineKeyboardButton("Cancel", callback_data=f"m:{token}"),
+            ]]),
+        )
+        return
+
+    if action == "R":
+
+        try:
+            account = telegraph("revokeAccessToken", access_token=token)
+
+        except Exception as error:
+            await query.message.reply_text(f"Could not revoke:\n{error}")
+            return
+
+        await send_token(query.message, account["access_token"], revoked=True)
+        return
+
+    if action == "m":
+        await send_menu(query.message, token)
+
+
+async def on_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Replies to our own prompts. The field and token come back out of the
+    prompt message, so nothing had to be remembered in between.
+    """
+
+    field, token, extras = read_carrier(update.message)
+
+    if not field:
+        return
+
+    if field == "new":
+        await create_identity(update.message, update.message.text.strip())
+        return
+
+    if field == "byline":
+
+        name, _, url = update.message.text.strip().partition(",")
+
+        if not name.strip():
+            await update.message.reply_text("Give a name for the byline.")
+            return
+
+        await prompt_post(
+            update.message,
+            token,
+            override=(name.strip(), normalize_url(url) or ""),
+        )
+        return
+
+    if field == "revise":
+        await revise_page(update.message, token, extras.get("path", ""))
+        return
+
+    if field in ("post", "anon"):
+
+        override = ("n" in extras) and (extras.get("n", ""), extras.get("u", ""))
+
+        await publish(
+            update.message,
+            token,
+            anonymous=field == "anon",
+            override=override or None,
+        )
+        return
+
+    if field not in LIMITS:
+        return
+
+    text = update.message.text.strip()
+
+    value = "" if is_clear(text) else text
+
+    if field == "author_url" and value:
+        value = normalize_url(value) or ""
+
+    if field == "short_name" and not value:
+        await update.message.reply_text("A short name is required.")
+        return
+
+    if len(value) > LIMITS[field]:
+        await update.message.reply_text(
+            f"That {FIELD_LABELS[field]} is too long "
+            f"(max {LIMITS[field]} characters)."
+        )
+        return
+
+    try:
+        # Omitted fields are preserved by Telegraph, so send only this one.
+        telegraph("editAccountInfo", access_token=token, **{field: value})
+
+    except Exception as error:
+        await update.message.reply_text(f"Could not update:\n{error}")
+        return
+
+    await send_menu(
+        update.message,
+        token,
+        note=f"Updated {FIELD_LABELS[field]}.",
+    )
+
+
+# -----------------------
+# Main
+# -----------------------
+
+async def register_commands(app):
+    """
+    Populate the in-app command menu so the surface is discoverable.
+    """
+
+    await app.bot.set_my_commands([
+        ("new", "Create a Telepatch identity"),
+        ("post", "Publish - reply to your pinned identity"),
+        ("pages", "List your pages - reply to your pinned identity"),
+        ("revise", "Rewrite a post - reply to its Published message"),
+        ("site", "Build or refresh your public index"),
+        ("manage", "Byline, URL, revoke - reply to your pinned identity"),
+        ("views", "Views for any page: /views <url>"),
+        ("privacy", "What this bot keeps (nothing)"),
+        ("about", "About Telepatch"),
+    ])
+
+
+def main():
+
+    # Keep message content and tokens out of the logs. Without this, httpx
+    # logs every request URL at INFO, which would include access tokens.
+    logging.basicConfig(level=logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("telegram").setLevel(logging.WARNING)
+
+    app = (
+        Application.builder()
+        .token(TELEGRAM_TOKEN)
+        .post_init(register_commands)
+        .build()
+    )
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("about", about))
+    app.add_handler(CommandHandler("privacy", privacy))
+    app.add_handler(CommandHandler("new", new))
+    app.add_handler(CommandHandler("manage", manage))
+    app.add_handler(CommandHandler("post", post))
+    app.add_handler(CommandHandler("pages", pages))
+    app.add_handler(CommandHandler("revise", revise))
+    app.add_handler(CommandHandler("site", site))
+    app.add_handler(CommandHandler("views", views))
+
+    app.add_handler(CallbackQueryHandler(on_button))
+
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, on_photo))
+
+    app.add_handler(
+        MessageHandler(
+            filters.REPLY & filters.TEXT & ~filters.COMMAND,
+            on_reply,
+        )
+    )
+
+    print("TelepatchBot running")
+
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
