@@ -467,6 +467,42 @@ def leading_url(para):
     return url, caption
 
 
+# Telegram has no heading format of its own, so /post borrows Markdown's.
+# h3 and h4 are the only headings Telegraph accepts, and they are what the
+# website builds an article's contents from.
+HEADING_RE = re.compile(r"^(#{1,3})\s+")
+
+
+def as_heading(para):
+    """
+    Promote a paragraph opening with # to a heading. # and ## give h3, ###
+    gives h4 - Telegraph offers nothing above h3, and the page title already
+    occupies that level.
+    """
+
+    if not para or not isinstance(para[0], str):
+        return None
+
+    match = HEADING_RE.match(para[0].lstrip())
+
+    if not match:
+        return None
+
+    tag = "h4" if len(match.group(1)) == 3 else "h3"
+
+    # Strip the marker but keep any bold or links that followed it.
+    first = para[0].lstrip()[match.end():]
+
+    children = ([first] if first else []) + list(para[1:])
+
+    if not any(
+        not isinstance(c, str) or c.strip() for c in children
+    ):
+        return None
+
+    return {"tag": tag, "children": children}
+
+
 def as_media(para):
     """
     Promote a paragraph to a figure when it is just a media URL.
@@ -538,7 +574,10 @@ def to_content(text_html):
         if not any(not isinstance(n, str) or n.strip() for n in para):
             continue
 
-        content.append(as_media(para) or {"tag": "p", "children": para})
+        content.append(
+            as_heading(para) or as_media(para)
+            or {"tag": "p", "children": para}
+        )
 
     return content or [{"tag": "p", "children": [""]}]
 
@@ -687,7 +726,7 @@ def page_excerpt(content, limit=EXCERPT_LIMIT):
         if not isinstance(node, dict):
             continue
 
-        if node.get("tag") in ("aside", "figure"):
+        if node.get("tag") in ("aside", "figure", "h3", "h4"):
             continue
 
         text = " ".join(node_text(node).split())
@@ -936,6 +975,8 @@ async def prompt_post(message, token, anonymous=False, override=None):
         "Bold, italics and links you type here are kept.\n\n"
         "An image URL on its own line becomes a picture - add words after "
         "it for a caption. YouTube, Vimeo and Twitter links become embeds.\n\n"
+        "A line starting <code>##</code> becomes a heading, and headings "
+        "build the contents list on your site.\n\n"
         f"{note}"
         + carrier_link("anon" if anonymous else "post", token, **extras)
         + browser,

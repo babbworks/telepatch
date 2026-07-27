@@ -53,9 +53,11 @@ you should never need to paste it.
 | `/pages` | List what this identity has published |
 | `/revise` | Rewrite a post — reply to its **Published** message |
 | `/site` | Build or refresh the public index |
+| `/about` | Set the introduction shown above your index |
 | `/manage` | Byline, author URL, revoke |
 | `/views <url>` | Title, byline and views for any Telegraph page — **no token needed** |
 | `/privacy` | What the bot keeps, and what it cannot protect |
+| `/telepatch` | About Telepatch |
 
 ### Writing a post
 
@@ -65,9 +67,15 @@ tin, industry, longform
 
 The price held steady for most of the decade, then moved sharply.
 
+## What moved it
+
 https://example.com/photo.jpg a sample, photographed against white
 
 Three things drove it, none of them obvious at the time.
+
+### The Cornish mines
+
+Detail that belongs under the section above.
 ```
 
 - **Line one** is the title.
@@ -77,6 +85,9 @@ Three things drove it, none of them obvious at the time.
   centred subtitle and the website reads back as tags.
 - An **image URL alone on a line** becomes a picture; words after it become
   the caption. YouTube, Vimeo and Twitter links become embeds.
+- **`#` or `##` starts a heading**, `###` a subheading. Telegraph allows
+  only `h3` and `h4`, and the page title already occupies the level above.
+  Two or more headings give the article a contents list on the website.
 - Bold, italics and links you type in Telegram survive into the article.
 
 Telegraph's upload endpoint is closed to third parties, so images must be
@@ -88,13 +99,27 @@ the Telegraph editor, where uploads do work; copy the resulting
 
 `/site` enumerates your pages, reads each one's categories, and writes a
 single **master post** — an ordinary Telegraph page listing your articles as
-`Title — date · categories`.
+
+```
+Title — 2026-07-27 · 6 min · tin, industry
+The price held steady for most of the decade, then moved sharply…
+```
+
+The date, the reading time and the opening excerpt are all recorded there, so
+the website needs one request rather than one per article.
 
 That page is the entire website. `getPageList` requires a token, so a visitor
 can never enumerate an account; publishing an index has to be a deliberate
-act. The master post is also where publication dates are recorded, since
-Telegraph exposes none — rebuilding reads the old dates back before
-overwriting, so the record survives without the bot remembering anything.
+act.
+
+The master post is also the only durable record Telepatch has. Telegraph
+exposes no publication date, so `/site` writes one and reads it back before
+each rebuild. Prose typed above the list — your site's introduction, set with
+`/about` — is preserved the same way. Nothing is remembered by the bot; the
+page itself is the memory, and the publisher owns it.
+
+Running `/site` again rewrites that page rather than creating another.
+Telegraph has no `deletePage`, so a stray index would be permanent.
 
 A page tagged `nav` becomes a top-bar link instead of an index entry.
 
