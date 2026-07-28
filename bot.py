@@ -2015,11 +2015,19 @@ async def site(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # rather than calling it after the token.
     title = command_words(context) or None
 
+    # A rebuild trusts what the index already recorded. That is wrong only
+    # for a page edited outside the bot, so there has to be a way to say so.
+    refresh = bool(title) and title.lower() in ("refresh", "rescan")
+
+    if refresh:
+        title = None
+
     await rebuild_site(
         update.message,
         token,
         master_path=extras.get("site"),
         title=title,
+        refresh=refresh,
     )
 
 
@@ -2713,17 +2721,28 @@ async def publish(message, token, anonymous, override=None, site=None):
 ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
-def read_index_dates(content):
-    """
-    Recover {path: iso date} from an existing master post.
+# " — 2026-07-28 · 6 min · tin, industry", written by build_index. Every
+# part after the date is optional, because /link entries claim no reading
+# time and not everything is categorised.
+ENTRY_META = re.compile(
+    r"(\d{4}-\d{2}-\d{2})"
+    r"(?:\s*·\s*(\d+)\s*min)?"
+    r"(?:\s*·\s*(.+?))?\s*$"
+)
 
-    Telegraph exposes no publication date, so the master post is where a
-    date first gets written down - and rebuilding must not lose it. The
-    record lives in the publisher's own public page rather than in any
-    store of ours, which keeps the bot stateless while still remembering.
+
+def read_index_entries(content):
+    """
+    Recover everything an existing index recorded, keyed by page path.
+
+    The index is not just a rendering of the account - it is the only place
+    the publication date exists at all, and it already holds the reading
+    time, categories and excerpt that /site would otherwise refetch every
+    page to recompute. Reading it back is derivation from the authoritative
+    source, not a cache of one.
     """
 
-    dates = {}
+    found = {}
 
     def walk(nodes):
 
@@ -2742,12 +2761,38 @@ def read_index_dates(content):
 
             if anchor and (anchor.get("attrs") or {}).get("href"):
 
-                meta = "".join(k for k in kids if isinstance(k, str))
-                found = ISO_DATE.search(meta)
-                path = telegraph_path(anchor["attrs"]["href"])
+                href = anchor["attrs"]["href"]
+                path = telegraph_path(href)
 
-                if found and path:
-                    dates[path] = found.group(0)
+                # Everything before the <br> is machine-read - date,
+                # reading time, categories - and everything after it is the
+                # excerpt. Joining every string child instead put the
+                # excerpt on the end of the last category.
+                at = next(
+                    (i for i, k in enumerate(kids)
+                     if isinstance(k, dict) and k.get("tag") == "br"),
+                    len(kids),
+                )
+
+                meta = "".join(k for k in kids[:at] if isinstance(k, str))
+                excerpt = "".join(
+                    k for k in kids[at + 1:] if isinstance(k, str)
+                ).strip()
+
+                stamp = ENTRY_META.search(meta)
+
+                if stamp and path and "github.com" not in href:
+                    found[path] = {
+                        "title": node_text(anchor).strip(),
+                        "url": href,
+                        "date": stamp.group(1),
+                        "minutes": int(stamp.group(2)) if stamp.group(2) else 0,
+                        "categories": [
+                            c.strip() for c in (stamp.group(3) or "").split(",")
+                            if c.strip()
+                        ],
+                        "excerpt": excerpt,
+                    }
 
                 continue
 
@@ -2755,7 +2800,15 @@ def read_index_dates(content):
 
     walk(content)
 
-    return dates
+    return found
+
+
+def read_index_dates(content):
+    """
+    Just the dates, for callers that want nothing else.
+    """
+
+    return {p: e["date"] for p, e in read_index_entries(content).items()}
 
 
 def is_index(content):
@@ -2769,35 +2822,64 @@ def is_index(content):
     return any(mark in text for mark in INDEX_MARKS)
 
 
-def scan_pages(token):
+# Enough to hide the latency, few enough to stay a polite guest. An
+# unbounded burst at a free API on somebody else's behalf is a bad way to
+# introduce yourself, and the limits are not documented.
+SCAN_WORKERS = 8
+
+
+def scan_pages(token, known=None, have=None):
     """
-    Fetch every page with its content, once.
+    Every page on the account, with content where content is needed.
 
     The bot holds the token, so it can enumerate pages the public API will
     not. One pass serves both jobs that need it - finding the existing
     index, and building the new one.
 
-    Runs in a worker thread: it is a few hundred blocking calls at worst.
+    `known` is what the current index already records. A page listed there
+    needs no fetch: its title, date, reading time, categories and excerpt
+    were computed last time and written down, and re-deriving them is the
+    single most expensive thing this bot does. A page in that list is also
+    provably not an index, since indexes are never listed as entries.
+
+    Runs in a worker thread, and fans out inside it.
     """
 
+    known = known or {}
+    have = have or {}
+
     listing = _post("getPageList", access_token=token, limit=INDEX_LIMIT)
+    pages = listing.get("pages", [])
 
-    scanned = []
+    wanted = [
+        p for p in pages
+        if p["path"] not in known and p["path"] not in have
+    ]
 
-    for page in listing.get("pages", []):
-
+    def fetch(page):
         try:
-            full = _post(
-                "getPage", path=page["path"], return_content="true"
-            )
+            return _post("getPage", path=page["path"], return_content="true")
 
         except Exception:
             # A page that will not load simply gets no categories.
-            full = {}
+            return {}
 
-        scanned.append((page, full.get("content")))
+    fetched = {}
 
-    return scanned
+    if wanted:
+        workers = min(SCAN_WORKERS, len(wanted))
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for page, full in zip(wanted, pool.map(fetch, wanted)):
+                fetched[page["path"]] = full.get("content")
+
+    log.info("scan.done pages=%s fetched=%s reused=%s",
+             len(pages), len(wanted), len(pages) - len(wanted))
+
+    return [
+        (page, have.get(page["path"], fetched.get(page["path"])))
+        for page in pages
+    ]
 
 
 def pick_master(scanned):
@@ -3083,7 +3165,7 @@ def claimed_paths(scanned):
 
 def build_index(scanned, master_path=None, known_dates=None,
                 masthead=None, footer=None, byline=BYLINE_DEFAULT,
-                external=None, filed=None):
+                external=None, filed=None, known=None):
     """
     Lay the account's articles out as the content of one master post.
 
@@ -3094,6 +3176,7 @@ def build_index(scanned, master_path=None, known_dates=None,
     """
 
     known_dates = known_dates or {}
+    known = known or {}
     filed = filed or set()
     today = date.today().isoformat()
 
@@ -3105,6 +3188,23 @@ def build_index(scanned, master_path=None, known_dates=None,
             continue
 
         if page["path"] in filed:
+            continue
+
+        # Not fetched this time, because the index already recorded it.
+        # Safe by construction: only entries appear in that record, and an
+        # index is never listed as an entry.
+        recorded = known.get(page["path"]) if content is None else None
+
+        if recorded:
+            entries.append({
+                "title": page.get("title") or recorded["title"],
+                "url": page["url"],
+                "path": page["path"],
+                "categories": recorded["categories"],
+                "date": known_dates.get(page["path"], recorded["date"]),
+                "excerpt": recorded["excerpt"],
+                "minutes": recorded["minutes"],
+            })
             continue
 
         categories = page_categories(content)
@@ -3180,9 +3280,15 @@ def build_index(scanned, master_path=None, known_dates=None,
     return entries, content
 
 
-async def rebuild_site(message, token, master_path=None, title=None):
+async def rebuild_site(message, token, master_path=None, title=None,
+                       refresh=False):
     """
     Create the master post, or rewrite it in place when one already exists.
+
+    A rebuild reads back what the last one wrote rather than recomputing
+    it, so the work scales with what has been published since - not with
+    what the account holds. /site refresh forces the full pass, which is
+    what an article edited outside the bot needs.
     """
 
     notice = await message.reply_text(
@@ -3196,8 +3302,26 @@ async def rebuild_site(message, token, master_path=None, title=None):
         await notice.edit_text(f"That token did not work:\n{error}")
         return
 
+    # The index has to be read before the scan, because it is what makes
+    # the scan cheap. Without a path there is nothing to read, so the first
+    # rebuild of an account is a full pass whatever happens.
+    recorded, have = {}, {}
+
+    if master_path and not refresh:
+        try:
+            current = await telegraph(
+                "getPage", path=master_path, return_content="true"
+            )
+            recorded = read_index_entries(current.get("content"))
+            # Already in hand; the scan should not ask for it again.
+            have[master_path] = current.get("content")
+
+        except Exception:
+            # Unreadable index: fall back to reading everything.
+            recorded, have = {}, {}
+
     try:
-        scanned = await asyncio.to_thread(scan_pages, token)
+        scanned = await asyncio.to_thread(scan_pages, token, recorded, have)
 
     except Exception as error:
         await notice.edit_text(f"Could not read your pages:\n{error}")
@@ -3249,7 +3373,7 @@ async def rebuild_site(message, token, master_path=None, title=None):
 
         entries, content = build_index(
             scanned, master_path, known_dates, masthead, footer,
-            read_byline(old), read_external(old), filed
+            read_byline(old), read_external(old), filed, recorded
         )
 
         # Said out loud, always. A page quietly missing from a rebuild that
