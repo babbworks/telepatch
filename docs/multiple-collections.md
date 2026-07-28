@@ -47,6 +47,23 @@ collection they now **refuse and ask** rather than guessing — `/about` and
 the one unambiguous answer, and it keeps the old behaviour for anyone who
 never asks for a second collection.
 
+### Writing for a collection
+
+`/post` replying to a collection's message writes for that collection: the
+page is created as usual and then added to that index, with its reading
+time and opening paragraph, because a curated collection is never
+enumerated and the entry would otherwise never appear. Replying to the
+identity message writes for the primary, as before.
+
+The path travels on the ForceReply carrier, which is a hidden link with no
+length limit — the same reason `/revise` can carry a page path while a
+button cannot.
+
+**A post written for a collection also appears in the primary.** The
+primary is the account's whole output; a collection is a selection from
+it. That is the intended reading, but it is a decision rather than a
+technical necessity — see the open questions.
+
 ### The trap that had to be closed first
 
 Five separate commands rewrite an index, and every one of them rebuilt the
@@ -270,7 +287,20 @@ already exists, gives the account two. Only the newest would be found.
 ## Open questions
 
 1. Is a collection a *view* of an account's pages, or a *thing pages
-   belong to*? Everything above follows from the answer.
+   belong to*? Everything above follows from the answer. Currently a
+   view: a post written for a collection appears there **and** in the
+   primary, because the primary lists everything published.
+
+   If exclusivity is wanted later, the cheapest route needs no format
+   change at all. `scan_pages` already fetches every page's content, so
+   `/site` can see what each curated collection lists and skip those
+   pages when rebuilding the primary — membership is already recorded, in
+   the collection's own list. It would be one filter in `build_index`,
+   and removing the filter restores today's behaviour exactly.
+
+   The reason it is not the default: a page silently vanishing from the
+   main index because somebody linked it somewhere is a surprise, and an
+   alarming one.
 2. If articles get tagged with a collection, where does the tag live so
    that a page written by hand in the Telegraph editor still works?
 3. Should `/new` stay the recommended way to separate concerns? Separate

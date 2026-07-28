@@ -1042,7 +1042,7 @@ async def prompt_byline(message, token):
     )
 
 
-async def prompt_post(message, token, anonymous=False, override=None):
+async def prompt_post(message, token, anonymous=False, override=None, site=None):
     """
     A ForceReply message cannot also carry an inline keyboard, so the
     browser-authoring link goes inline in the text as a hyperlink.
@@ -1061,6 +1061,13 @@ async def prompt_post(message, token, anonymous=False, override=None):
 
     if override:
         extras = {"n": override[0], "u": override[1]}
+
+    # Which collection this is being written for. The carrier is a hidden
+    # link with no length limit, so a path rides along freely - unlike a
+    # button, where an action and a token already fill the 64 bytes.
+    if site:
+        extras["site"] = site
+        note += "\n\nIt will be added to the collection you replied to."
 
     browser = ""
 
@@ -1306,7 +1313,11 @@ async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    await prompt_post(update.message, token)
+    # Replying to a collection writes for that collection. Replying to the
+    # identity writes for the primary, which lists everything anyway.
+    _, _, extras = read_carrier(update.message)
+
+    await prompt_post(update.message, token, site=extras.get("site"))
 
 
 async def new(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1477,22 +1488,18 @@ async def add_external(message, token, path):
     await splice_entry(message, token, path, url, title, categories, excerpt, kind)
 
 
-async def splice_entry(message, token, path, url, title, categories, excerpt, kind):
+def insert_entry(token, path, url, title, categories, excerpt, minutes=0):
     """
-    Put one entry at the top of the index list, dated today so it sorts
-    newest.
+    Put one entry at the top of an index list, dated today so it sorts
+    newest. Raises rather than replying, so it can be used from a command
+    that has its own message to send.
 
-    editPage replaces a page wholesale, so everything else the master post
-    carries - masthead, footer, byline mode, author fields - has to be read
-    first and written back with it.
+    editPage replaces a page wholesale, so everything else the index
+    carries - masthead, footer, byline mode, whether it is a curated
+    collection, author fields - is read first and written back with it.
     """
 
-    try:
-        page = telegraph("getPage", path=path, return_content="true")
-
-    except Exception as error:
-        await message.reply_text(f"Could not find your index:\n{error}")
-        return
+    page = telegraph("getPage", path=path, return_content="true")
 
     head, middle, foot = split_master(page.get("content"))
 
@@ -1506,9 +1513,12 @@ async def splice_entry(message, token, path, url, title, categories, excerpt, ki
         {"tag": "a", "attrs": {"href": url}, "children": [title]}
     ]
 
-    # No reading time: the length of somebody else's page is not ours to
-    # claim, and the website copes with the field being absent.
     meta = INDEX_SEP + date.today().isoformat()
+
+    # Reading time only when it is ours to claim: we counted the words of a
+    # page published here, and cannot honestly guess at somebody else's.
+    if minutes:
+        meta += f" · {minutes} min"
 
     if categories:
         meta += " · " + ", ".join(categories)
@@ -1523,22 +1533,31 @@ async def splice_entry(message, token, path, url, title, categories, excerpt, ki
         0, {"tag": "li", "children": children}
     )
 
+    telegraph(
+        "editPage",
+        access_token=token,
+        path=path,
+        title=page["title"],
+        content=json.dumps(
+            head + middle + foot + [kept_marker(page.get("content"))]
+        ),
+        author_name=page.get("author_name") or "",
+        author_url=page.get("author_url") or "",
+    )
+
+    return page["title"]
+
+
+async def splice_entry(message, token, path, url, title, categories, excerpt, kind):
+    """
+    insert_entry, with the replies a command needs around it.
+    """
+
     try:
-        telegraph(
-            "editPage",
-            access_token=token,
-            path=path,
-            title=page["title"],
-            content=json.dumps(
-                head + middle + foot
-                + [kept_marker(page.get("content"))]
-            ),
-            author_name=page.get("author_name") or "",
-            author_url=page.get("author_url") or "",
-        )
+        insert_entry(token, path, url, title, categories, excerpt)
 
     except Exception as error:
-        await message.reply_text(f"Could not save it:\n{error}")
+        await message.reply_text(f"Could not add it:\n{error}")
         return
 
     await message.reply_text(
@@ -2363,7 +2382,7 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def publish(message, token, anonymous, override=None):
+async def publish(message, token, anonymous, override=None, site=None):
     """
     createPage does not inherit account defaults, so the byline is read
     and forwarded here - or deliberately withheld when anonymous, or
@@ -2417,12 +2436,39 @@ async def publish(message, token, anonymous, override=None):
 
     tagline = f" · {', '.join(categories)}" if categories else ""
 
+    # A curated collection is not enumerated by /site, so a page written
+    # for one has to be put there now or it would never appear.
+    added = ""
+
+    if site:
+        try:
+            words = page_words(content)
+
+            index_title = await asyncio.to_thread(
+                insert_entry,
+                token, site, page["url"], title, categories,
+                page_excerpt(content),
+                max(1, round(words / WORDS_PER_MINUTE)),
+            )
+            added = f"\nAdded to <b>{index_title}</b>."
+
+        except Exception as error:
+            added = (
+                f"\nCould not add it to that collection: {error}\n"
+                "The page itself is published and safe."
+            )
+
+    extras = {"path": page["path"]}
+
+    if site:
+        extras["site"] = site
+
     # The carrier here means a reply of "/revise" to this message needs no
     # arguments - both the token and the page path come out of it.
     await message.reply_text(
-        f"<b>Published.</b> ({byline}{tagline})\n\n{page['url']}\n\n"
+        f"<b>Published.</b> ({byline}{tagline}){added}\n\n{page['url']}\n\n"
         "Reply to this message with /revise to change it."
-        + carrier_link("page", token, path=page["path"]),
+        + carrier_link("page", token, **extras),
         parse_mode=ParseMode.HTML,
         disable_web_page_preview=True,
     )
@@ -3129,6 +3175,7 @@ async def on_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
             token,
             anonymous=field == "anon",
             override=override or None,
+            site=extras.get("site"),
         )
         return
 
