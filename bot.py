@@ -88,6 +88,17 @@ RETIRED_MARK = "Retired Telepatch index."
 
 INDEX_MARKS = (MASTER_MARK, RETIRED_MARK)
 
+# One token may own several collections. Exactly one is the primary: the
+# index /site enumerates the whole account into, and the only one that
+# existed before this field did. Every other carries this on its marker
+# line and is curated by hand, through /link, /repo and the extension.
+#
+# An index written before multiple collections existed has no such field
+# and is therefore primary, which is what makes this change reversible:
+# remove the feature and the primary is still the only thing anything
+# looks for. docs/multiple-collections.md records the way back.
+EXTRA_FIELD = "collection=extra"
+
 # Stands in for the list when an account has nothing published. Named so the
 # masthead reader can tell it apart from the publisher's own prose.
 EMPTY_NOTICE = "Nothing published yet."
@@ -1126,6 +1137,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/footer - set your site's footer\n"
         "/link - add a GitHub page to your index\n"
         "/repo - add a GitHub repository, files and README\n"
+        "/collections - list your collections\n"
+        "/newsite - start another collection\n"
+        "/retire - take a collection out of service\n"
         "/byline - how bylines show on your site\n"
         "/telepatch - about Telepatch",
 
@@ -1321,14 +1335,27 @@ async def find_site(update, context, command):
     if not path:
         notice = await update.message.reply_text("Finding your index…")
         scanned = await asyncio.to_thread(scan_pages, token)
-        path, _ = pick_master(scanned)
+        indexes = list_indexes(scanned)
         await notice.delete()
 
-    if not path:
-        await update.message.reply_text(
-            f"You have no index yet. Run /site first, then {command}."
-        )
-        return token, None
+        if not indexes:
+            await update.message.reply_text(
+                f"You have no index yet. Run /site first, then {command}."
+            )
+            return token, None
+
+        # With several collections there is no safe guess to make. /about
+        # and /footer overwrite prose, so picking the wrong one destroys
+        # writing rather than merely surprising somebody.
+        if len(indexes) > 1:
+            await update.message.reply_text(
+                f"You have {len(indexes)} collections, so {command} needs to "
+                "know which one.\n\nRun /collections and reply to the one you "
+                f"mean with {command}.",
+            )
+            return token, None
+
+        path = indexes[0]["path"]
 
     return token, path
 
@@ -1481,7 +1508,7 @@ async def splice_entry(message, token, path, url, title, categories, excerpt, ki
             title=page["title"],
             content=json.dumps(
                 head + middle + foot
-                + [marker_node(read_byline(page.get("content")))]
+                + [kept_marker(page.get("content"))]
             ),
             author_name=page.get("author_name") or "",
             author_url=page.get("author_url") or "",
@@ -1660,7 +1687,10 @@ async def byline_site(update: Update, context: ContextTypes.DEFAULT_TYPE):
             access_token=token,
             path=path,
             title=page["title"],
-            content=json.dumps(head + middle + foot + [marker_node(wanted)]),
+            content=json.dumps(
+                head + middle + foot
+                + [kept_marker(page.get("content"), wanted)]
+            ),
             author_name=page.get("author_name") or "",
             author_url=page.get("author_url") or "",
         )
@@ -1721,7 +1751,7 @@ async def set_footer(message, token, path):
     head, middle, _ = split_master(page.get("content"))
 
     content = head + middle + footer + [
-        marker_node(read_byline(page.get("content")))
+        kept_marker(page.get("content"))
     ]
 
     try:
@@ -1767,7 +1797,7 @@ async def set_masthead(message, token, path):
     masthead = [] if is_clear(text) else to_content(message.text_html or text)
 
     _, middle, foot = split_master(page.get("content"))
-    rest = middle + foot + [marker_node(read_byline(page.get("content")))]
+    rest = middle + foot + [kept_marker(page.get("content"))]
 
     try:
         telegraph(
@@ -1826,6 +1856,199 @@ async def site(update: Update, context: ContextTypes.DEFAULT_TYPE):
         token,
         master_path=extras.get("site"),
         title=title,
+    )
+
+
+async def collections_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    List every collection on this identity.
+
+    One message each rather than one message with buttons: callback_data is
+    capped at 64 bytes and an action plus a token already uses 62, so a
+    path cannot ride along with it. Each message carries its own path in a
+    hidden link instead, which is what makes it repliable.
+    """
+
+    token = token_for(update, context)
+
+    if not token:
+        await update.message.reply_text(
+            token_hint("/collections"), parse_mode=ParseMode.HTML
+        )
+        return
+
+    notice = await update.message.reply_text("Reading your account…")
+
+    try:
+        scanned = await asyncio.to_thread(scan_pages, token)
+
+    except Exception as error:
+        await notice.edit_text(f"Could not read your pages:\n{error}")
+        return
+
+    indexes = list_indexes(scanned)
+    await notice.delete()
+
+    if not indexes:
+        await update.message.reply_text(
+            "You have no collections yet. Run /site to build your first."
+        )
+        return
+
+    await update.message.reply_text(
+        f"<b>{len(indexes)} collection{'' if len(indexes) == 1 else 's'}.</b>\n"
+        "Reply to any of these with /about, /footer, /byline, /link, /repo "
+        "or /site.",
+        parse_mode=ParseMode.HTML,
+    )
+
+    for index in indexes:
+
+        kind = ("curated - entries are added by hand" if index["extra"]
+                else "primary - /site enumerates everything you publish here")
+
+        await update.message.reply_text(
+            f"<b>{index['title']}</b>\n{kind}\n\n"
+            f"{SITE_URL}#{index['path']}"
+            + carrier_link("page", token, site=index["path"]),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+
+
+async def newsite(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Start a second collection on this identity.
+
+    It begins empty and stays that way until something is put in it. Only
+    the primary enumerates the account, or every collection would hold the
+    same thing.
+    """
+
+    token = token_for(update, context)
+
+    if not token:
+        await update.message.reply_text(
+            token_hint("/newsite"), parse_mode=ParseMode.HTML
+        )
+        return
+
+    title = " ".join(context.args).strip() if context.args else ""
+
+    if title and TOKEN_RE.fullmatch(title):
+        title = ""
+
+    if not title:
+        await update.message.reply_text(
+            "Give the collection a name:\n\n"
+            "<code>/newsite Reading notes</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    try:
+        info = get_account_info(token)
+
+    except Exception as error:
+        await update.message.reply_text(f"That token did not work:\n{error}")
+        return
+
+    content = [
+        {"tag": "ul", "children": []},
+        marker_node(BYLINE_DEFAULT, extra=True),
+    ]
+
+    try:
+        page = telegraph(
+            "createPage",
+            access_token=token,
+            title=title,
+            content=json.dumps(content),
+            author_name=info.get("author_name") or info.get("short_name") or "",
+            author_url=info.get("author_url") or "",
+        )
+
+    except Exception as error:
+        await update.message.reply_text(f"Could not create it:\n{error}")
+        return
+
+    sent = await update.message.reply_text(
+        f"<b>{title}</b> is live, and empty.\n\n"
+        f"{SITE_URL}#{page['path']}\n\n"
+        "Reply to this message with /link or /repo to put something in it, "
+        "or /about and /footer to give it an introduction.\n\n"
+        "It is curated: /site will not fill it from your published pages."
+        + carrier_link("page", token, site=page["path"]),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+    try:
+        await sent.pin(disable_notification=True)
+
+    except Exception:
+        pass
+
+
+async def retire(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Take a collection out of service.
+
+    Telegraph cannot delete a page, so the marker is replaced instead. A
+    retired index is skipped by everything that looks for one, and is
+    still never listed as an article. The page itself stays where it is.
+    """
+
+    token, path = await find_site(update, context, "/retire")
+
+    if not path:
+        return
+
+    try:
+        page = telegraph("getPage", path=path, return_content="true")
+
+    except Exception as error:
+        await update.message.reply_text(f"Could not find it:\n{error}")
+        return
+
+    content = page.get("content")
+
+    if not is_extra(content):
+        await update.message.reply_text(
+            "That is your primary collection, so it cannot be retired - "
+            "everything you publish is listed there.\n\n"
+            "Run /collections and reply to a curated one instead."
+        )
+        return
+
+    head, middle, foot = split_master(content)
+
+    try:
+        telegraph(
+            "editPage",
+            access_token=token,
+            path=path,
+            title=page["title"],
+            content=json.dumps(
+                head + middle + foot
+                + [{"tag": "p", "children": [RETIRED_MARK]}]
+            ),
+            author_name=page.get("author_name") or "",
+            author_url=page.get("author_url") or "",
+        )
+
+    except Exception as error:
+        await update.message.reply_text(f"Could not retire it:\n{error}")
+        return
+
+    await update.message.reply_text(
+        f"<b>{page['title']}</b> is retired.\n\n"
+        "It no longer appears in /collections and nothing will write to it. "
+        "The page itself still exists - Telegraph cannot delete one - so its "
+        "link keeps working for anyone who has it.\n\n"
+        f"{SITE_URL}#{path}",
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
     )
 
 
@@ -2281,18 +2504,48 @@ def scan_pages(token):
 
 def pick_master(scanned):
     """
-    The most recent page carrying our marker, if any. getPageList is newest
-    first, so the first hit is the current index.
+    The primary index, if any. getPageList is newest first, so the first
+    hit is the current one.
+
+    Curated collections are skipped: /site enumerates the account into the
+    primary alone, and an account that has never made a second collection
+    behaves exactly as it did before they existed.
     """
 
     for page, content in scanned:
 
         text = " ".join(node_text(n) for n in content or [])
 
-        if MASTER_MARK in text and RETIRED_MARK not in text:
+        if MASTER_MARK in text and RETIRED_MARK not in text \
+                and EXTRA_FIELD not in text:
             return page["path"], page.get("title")
 
     return None, None
+
+
+def list_indexes(scanned):
+    """
+    Every live index on the account, the primary first.
+    """
+
+    found = []
+
+    for page, content in scanned:
+
+        text = " ".join(node_text(n) for n in content or [])
+
+        if MASTER_MARK not in text or RETIRED_MARK in text:
+            continue
+
+        found.append({
+            "path": page["path"],
+            "title": page.get("title") or page["path"],
+            "extra": EXTRA_FIELD in text,
+        })
+
+    found.sort(key=lambda index: index["extra"])
+
+    return found
 
 
 def read_masthead(content):
@@ -2408,12 +2661,46 @@ def read_byline(content):
     return BYLINE_DEFAULT
 
 
-def marker_node(mode=BYLINE_DEFAULT):
+def marker_node(mode=BYLINE_DEFAULT, extra=False):
     """
     The one line the bot writes for itself, carrying the site's settings.
     """
 
-    return {"tag": "p", "children": [f"{MASTER_MARK} byline={mode}"]}
+    fields = f"byline={mode}"
+
+    if extra:
+        fields += f" {EXTRA_FIELD}"
+
+    return {"tag": "p", "children": [f"{MASTER_MARK} {fields}"]}
+
+
+def kept_marker(content, mode=None):
+    """
+    The marker line for a page being rewritten.
+
+    Five different commands rewrite an index and each one rebuilds this
+    line. Every one of them has to carry across what it did not come to
+    change, or editing the footer of a collection would quietly demote it
+    to the primary.
+    """
+
+    return marker_node(mode or read_byline(content), extra=is_extra(content))
+
+
+def is_extra(content):
+    """
+    True for a curated collection, False for the primary or for anything
+    that is not an index at all.
+    """
+
+    for node in content or []:
+
+        text = node_text(node)
+
+        if MASTER_MARK in text:
+            return EXTRA_FIELD in text
+
+    return False
 
 
 def read_footer(content):
@@ -2565,10 +2852,26 @@ async def rebuild_site(message, token, master_path=None, title=None):
     masthead = read_masthead(old)
     footer = read_footer(old)
 
-    entries, content = build_index(
-        scanned, master_path, known_dates, masthead, footer,
-        read_byline(old), read_external(old)
-    )
+    # A curated collection is a list somebody made on purpose. Enumerating
+    # the account into it would replace their choices with everything.
+    curated = is_extra(old)
+
+    if curated:
+        head, middle, foot = split_master(old)
+        content = head + middle + foot + [kept_marker(old)]
+
+        # Shaped like build_index's entries so the summary can count them.
+        listed = (middle[0].get("children") if middle else None) or []
+        entries = [
+            {"categories": []} for node in listed
+            if isinstance(node, dict) and node.get("tag") == "li"
+        ]
+
+    else:
+        entries, content = build_index(
+            scanned, master_path, known_dates, masthead, footer,
+            read_byline(old), read_external(old)
+        )
 
     byline = info.get("author_name") or info.get("short_name") or ""
 
@@ -2614,8 +2917,9 @@ async def rebuild_site(message, token, master_path=None, title=None):
            "New index created.\n")
         + "\n"
         f"{SITE_URL}#{page['path']}\n\n"
-        f"{len(entries) - nav} posts · {nav} nav pages · "
-        f"{len(tags)} categories\n"
+        + (f"{len(entries)} entries · curated by hand\n" if curated else
+           f"{len(entries) - nav} posts · {nav} nav pages · "
+           f"{len(tags)} categories\n")
         + (f"{', '.join(tags)}\n" if tags else "")
         + "\nAnyone can open that link - it carries no token.\n"
         "Reply to this message with /site after publishing to refresh it."
@@ -2866,6 +3170,8 @@ async def register_commands(app):
         ("footer", "Set the footer on your site"),
         ("link", "Add a GitHub or outward entry to your index"),
         ("repo", "Add a GitHub repository, files and README"),
+        ("collections", "List your collections"),
+        ("newsite", "Start another collection on this identity"),
         ("byline", "How bylines show: linked, separate, plain"),
         ("manage", "Byline, URL, revoke - reply to your pinned identity"),
         ("views", "Views for any page: /views <url>"),
@@ -2899,6 +3205,9 @@ def main():
     app.add_handler(CommandHandler("pages", pages))
     app.add_handler(CommandHandler("revise", revise))
     app.add_handler(CommandHandler("site", site))
+    app.add_handler(CommandHandler("collections", collections_cmd))
+    app.add_handler(CommandHandler("newsite", newsite))
+    app.add_handler(CommandHandler("retire", retire))
     app.add_handler(CommandHandler("about", about_site))
     app.add_handler(CommandHandler("footer", footer_site))
     app.add_handler(CommandHandler("byline", byline_site))
