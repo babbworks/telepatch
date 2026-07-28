@@ -18,7 +18,11 @@ ROOT = Path(__file__).resolve().parent.parent
 
 @pytest.fixture(scope="session")
 def bot():
-    os.environ.setdefault("TELEGRAM_TOKEN", "123456:test-token-not-real")
+    # Shaped like a BotFather token because bot.py now validates it at
+    # import, and refuses to start on anything that is not.
+    os.environ.setdefault(
+        "TELEGRAM_TOKEN", "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    )
 
     spec = importlib.util.spec_from_file_location("telepatch_bot", ROOT / "bot.py")
     module = importlib.util.module_from_spec(spec)

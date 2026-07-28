@@ -18,7 +18,10 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from html.parser import HTMLParser
 from urllib.parse import parse_qsl, quote, urlencode
@@ -47,7 +50,68 @@ from telegram.ext import (
 
 load_dotenv()
 
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
+log = logging.getLogger("telepatch")
+
+
+# A Telegraph token is 60 hex characters; a bot token is digits, a colon,
+# then 35 or so. Both travel through message payloads by design, so both
+# will reach exception text eventually.
+SECRETS = re.compile(r"\b[0-9a-fA-F]{60}\b|\b\d{6,12}:[A-Za-z0-9_-]{30,}\b")
+
+
+class Redact(logging.Filter):
+    """
+    Strip credentials from every log record, at the logging layer rather
+    than at each of the places one could leak. A token that reaches a log
+    file has escaped the design, so the last gate has to be unconditional.
+    """
+
+    def filter(self, record):
+        if isinstance(record.msg, str):
+            record.msg = SECRETS.sub("[redacted]", record.msg)
+
+        if record.args:
+            args = record.args if isinstance(record.args, tuple) else (record.args,)
+            record.args = tuple(
+                SECRETS.sub("[redacted]", a) if isinstance(a, str) else a
+                for a in args
+            )
+
+        return True
+
+
+def config(name, default=None, required=False):
+    """
+    Read one setting, and fail at startup rather than on first use. A bot
+    that starts and then breaks on somebody's first command is worse than
+    one that refuses to start.
+    """
+
+    value = (os.environ.get(name) or "").strip() or default
+
+    if required and not value:
+        raise SystemExit(
+            f"{name} is not set. Copy .env.example to .env, or set it in "
+            "the service unit."
+        )
+
+    return value
+
+
+TELEGRAM_TOKEN = config("TELEGRAM_TOKEN", required=True)
+
+if not re.fullmatch(r"\d{6,12}:[A-Za-z0-9_-]{30,}", TELEGRAM_TOKEN):
+    raise SystemExit(
+        "TELEGRAM_TOKEN does not look like a BotFather token "
+        "(digits, a colon, then the secret)."
+    )
+
+# Where errors and heartbeats go. Both optional: without them the bot runs
+# exactly as before, which is what a laptop wants and a server does not.
+OPERATOR_CHAT = config("OPERATOR_CHAT")
+HEARTBEAT_URL = config("HEARTBEAT_URL")
+HEARTBEAT_SECONDS = int(config("HEARTBEAT_SECONDS", "300"))
+LOG_LEVEL = config("LOG_LEVEL", "INFO").upper()
 
 TELEGRAPH_API = "https://api.telegra.ph"
 
@@ -324,28 +388,85 @@ def token_hint(command):
 # Telegraph API
 # -----------------------
 
-def telegraph(method, **params):
+# One connection, reused. Every call used to open a fresh TCP and TLS
+# handshake to the same host, which on a 200-page scan is 200 handshakes.
+SESSION = requests.Session()
+SESSION.headers["User-Agent"] = "Telepatch (+https://github.com/babbworks/telepatch)"
+
+# Retried only where a repeat cannot do damage. createPage and
+# createAccount are excluded on purpose: a timeout tells us nothing about
+# whether the write landed, and Telegraph has no way to delete the second
+# page. editPage is safe because writing the same content twice is the
+# same as writing it once.
+NEVER_RETRY = {"createPage", "createAccount"}
+
+RETRIES = 3
+BACKOFF = 0.4
+
+
+def _post(method, **params):
     """
     Every Telegraph method is a flat POST returning {ok, result|error}.
+
+    Blocking, on purpose - the async wrapper below is what handlers use.
+    This form is kept for the pooled workers, which are already off the
+    event loop and would only be paying for a second hop.
     """
 
-    response = requests.post(
-        f"{TELEGRAPH_API}/{method}",
-        data={k: v for k, v in params.items() if v is not None},
-        timeout=10,
-    )
+    url = f"{TELEGRAPH_API}/{method}"
+    data = {k: v for k, v in params.items() if v is not None}
 
-    response.raise_for_status()
+    attempts = 1 if method in NEVER_RETRY else RETRIES
+    last = None
 
-    data = response.json()
+    for attempt in range(attempts):
 
-    if not data.get("ok"):
-        raise RuntimeError(data.get("error", "unknown Telegraph error"))
+        try:
+            response = SESSION.post(url, data=data, timeout=10)
 
-    return data["result"]
+            # Telegraph answering "no" is an answer, not a failure. Only a
+            # broken conversation is worth trying again.
+            if response.status_code < 500:
+                payload = response.json()
+
+                if not payload.get("ok"):
+                    raise RuntimeError(payload.get("error", "unknown Telegraph error"))
+
+                return payload["result"]
+
+            last = RuntimeError(f"Telegraph returned {response.status_code}")
+
+        except (requests.RequestException, ValueError) as error:
+            last = error
+
+        if attempt + 1 < attempts:
+            time.sleep(BACKOFF * (2 ** attempt) + random.random() * 0.1)
+
+    log.warning("telegraph.failed method=%s attempts=%s error=%s",
+                method, attempts, last)
+
+    raise last if last else RuntimeError("Telegraph did not answer")
 
 
-def get_account_info(access_token):
+async def telegraph(method, **params):
+    """
+    What handlers call. requests is blocking and the bot now serves several
+    people at once, so every call goes to a worker thread rather than
+    stopping the event loop for up to ten seconds.
+    """
+
+    started = time.monotonic()
+
+    try:
+        return await asyncio.to_thread(_post, method, **params)
+
+    finally:
+        spent = (time.monotonic() - started) * 1000
+        if spent > 1500:
+            log.info("telegraph.slow method=%s ms=%.0f", method, spent)
+
+
+async def get_account_info(access_token):
     """
     Note for publishing: createPage does NOT inherit the account's
     author_name / author_url. Only the telegra.ph web editor reads those.
@@ -353,7 +474,7 @@ def get_account_info(access_token):
     or the article renders with an empty byline and just a date.
     """
 
-    return telegraph(
+    return await telegraph(
         "getAccountInfo",
         access_token=access_token,
         fields='["short_name","author_name","author_url","page_count"]',
@@ -916,7 +1037,7 @@ async def send_menu(target, token, note=None):
     """
 
     try:
-        info = get_account_info(token)
+        info = await get_account_info(token)
 
     except Exception as error:
         await target.reply_text(f"That token did not work:\n{error}")
@@ -1003,7 +1124,7 @@ async def prompt_revise(message, token, path):
     """
 
     try:
-        page = telegraph("getPage", path=path, return_content="false")
+        page = await telegraph("getPage", path=path, return_content="false")
 
     except Exception as error:
         await message.reply_text(f"Could not find that page:\n{error}")
@@ -1072,7 +1193,7 @@ async def prompt_post(message, token, anonymous=False, override=None, site=None)
     browser = ""
 
     try:
-        info = telegraph(
+        info = await telegraph(
             "getAccountInfo", access_token=token, fields='["auth_url"]'
         )
         browser = (
@@ -1500,7 +1621,7 @@ def insert_entry(token, path, url, title, categories, excerpt, minutes=0):
     collection, author fields - is read first and written back with it.
     """
 
-    page = telegraph("getPage", path=path, return_content="true")
+    page = _post("getPage", path=path, return_content="true")
 
     head, middle, foot = split_master(page.get("content"))
 
@@ -1534,7 +1655,7 @@ def insert_entry(token, path, url, title, categories, excerpt, minutes=0):
         0, {"tag": "li", "children": children}
     )
 
-    telegraph(
+    _post(
         "editPage",
         access_token=token,
         path=path,
@@ -1555,7 +1676,9 @@ async def splice_entry(message, token, path, url, title, categories, excerpt, ki
     """
 
     try:
-        insert_entry(token, path, url, title, categories, excerpt)
+        await asyncio.to_thread(
+            insert_entry, token, path, url, title, categories, excerpt
+        )
 
     except Exception as error:
         await message.reply_text(f"Could not add it:\n{error}")
@@ -1702,7 +1825,7 @@ async def byline_site(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        page = telegraph("getPage", path=path, return_content="true")
+        page = await telegraph("getPage", path=path, return_content="true")
 
     except Exception as error:
         await update.message.reply_text(f"Could not find your index:\n{error}")
@@ -1725,7 +1848,7 @@ async def byline_site(update: Update, context: ContextTypes.DEFAULT_TYPE):
     head, middle, foot = split_master(page.get("content"))
 
     try:
-        telegraph(
+        await telegraph(
             "editPage",
             access_token=token,
             path=path,
@@ -1781,7 +1904,7 @@ async def set_footer(message, token, path):
     """
 
     try:
-        page = telegraph("getPage", path=path, return_content="true")
+        page = await telegraph("getPage", path=path, return_content="true")
 
     except Exception as error:
         await message.reply_text(f"Could not find your index:\n{error}")
@@ -1798,7 +1921,7 @@ async def set_footer(message, token, path):
     ]
 
     try:
-        telegraph(
+        await telegraph(
             "editPage",
             access_token=token,
             path=path,
@@ -1829,7 +1952,7 @@ async def set_masthead(message, token, path):
     """
 
     try:
-        page = telegraph("getPage", path=path, return_content="true")
+        page = await telegraph("getPage", path=path, return_content="true")
 
     except Exception as error:
         await message.reply_text(f"Could not find your index:\n{error}")
@@ -1843,7 +1966,7 @@ async def set_masthead(message, token, path):
     rest = middle + foot + [kept_marker(page.get("content"))]
 
     try:
-        telegraph(
+        await telegraph(
             "editPage",
             access_token=token,
             path=path,
@@ -1985,7 +2108,7 @@ async def newsite(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        info = get_account_info(token)
+        info = await get_account_info(token)
 
     except Exception as error:
         await update.message.reply_text(f"That token did not work:\n{error}")
@@ -1997,7 +2120,7 @@ async def newsite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     try:
-        page = telegraph(
+        page = await telegraph(
             "createPage",
             access_token=token,
             title=title,
@@ -2061,7 +2184,7 @@ async def unfile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        page = telegraph("getPage", path=path, return_content="true")
+        page = await telegraph("getPage", path=path, return_content="true")
 
     except Exception as error:
         await update.message.reply_text(f"Could not find that collection:\n{error}")
@@ -2108,7 +2231,7 @@ async def unfile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     listing["children"] = kept
 
     try:
-        telegraph(
+        await telegraph(
             "editPage",
             access_token=token,
             path=path,
@@ -2153,7 +2276,7 @@ async def retire(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        page = telegraph("getPage", path=path, return_content="true")
+        page = await telegraph("getPage", path=path, return_content="true")
 
     except Exception as error:
         await update.message.reply_text(f"Could not find it:\n{error}")
@@ -2172,7 +2295,7 @@ async def retire(update: Update, context: ContextTypes.DEFAULT_TYPE):
     head, middle, foot = split_master(content)
 
     try:
-        telegraph(
+        await telegraph(
             "editPage",
             access_token=token,
             path=path,
@@ -2277,7 +2400,7 @@ async def views(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        page = telegraph("getPage", path=path, return_content="false")
+        page = await telegraph("getPage", path=path, return_content="false")
 
     except Exception as error:
         await update.message.reply_text(f"Could not read that page:\n{error}")
@@ -2310,7 +2433,7 @@ async def create_identity(message, text):
         return
 
     try:
-        account = telegraph(
+        account = await telegraph(
             "createAccount",
             short_name=short_name,
             author_name=author_name,
@@ -2386,7 +2509,7 @@ async def send_token(message, token, info=None, revoked=False):
 async def send_pages(target, token):
 
     try:
-        result = telegraph(
+        result = await telegraph(
             "getPageList",
             access_token=token,
             limit=50,
@@ -2447,7 +2570,7 @@ async def send_editor_link(target, token):
     """
 
     try:
-        info = telegraph(
+        info = await telegraph(
             "getAccountInfo",
             access_token=token,
             fields='["auth_url"]',
@@ -2520,7 +2643,7 @@ async def publish(message, token, anonymous, override=None, site=None):
     else:
 
         try:
-            info = get_account_info(token)
+            info = await get_account_info(token)
 
         except Exception as error:
             await message.reply_text(f"That token did not work:\n{error}")
@@ -2530,7 +2653,7 @@ async def publish(message, token, anonymous, override=None, site=None):
         author_url = info.get("author_url") or ""
 
     try:
-        page = telegraph(
+        page = await telegraph(
             "createPage",
             access_token=token,
             title=title,
@@ -2657,14 +2780,14 @@ def scan_pages(token):
     Runs in a worker thread: it is a few hundred blocking calls at worst.
     """
 
-    listing = telegraph("getPageList", access_token=token, limit=INDEX_LIMIT)
+    listing = _post("getPageList", access_token=token, limit=INDEX_LIMIT)
 
     scanned = []
 
     for page in listing.get("pages", []):
 
         try:
-            full = telegraph(
+            full = _post(
                 "getPage", path=page["path"], return_content="true"
             )
 
@@ -3067,7 +3190,7 @@ async def rebuild_site(message, token, master_path=None, title=None):
     )
 
     try:
-        info = get_account_info(token)
+        info = await get_account_info(token)
 
     except Exception as error:
         await notice.edit_text(f"That token did not work:\n{error}")
@@ -3140,7 +3263,7 @@ async def rebuild_site(message, token, master_path=None, title=None):
 
     try:
         if master_path:
-            page = telegraph(
+            page = await telegraph(
                 "editPage",
                 access_token=token,
                 path=master_path,
@@ -3151,7 +3274,7 @@ async def rebuild_site(message, token, master_path=None, title=None):
             )
 
         else:
-            page = telegraph(
+            page = await telegraph(
                 "createPage",
                 access_token=token,
                 title=site_title,
@@ -3215,14 +3338,14 @@ async def revise_page(message, token, path):
         return
 
     try:
-        current = telegraph("getPage", path=path, return_content="false")
+        current = await telegraph("getPage", path=path, return_content="false")
 
     except Exception as error:
         await message.reply_text(f"Could not find that page:\n{error}")
         return
 
     try:
-        page = telegraph(
+        page = await telegraph(
             "editPage",
             access_token=token,
             path=path,
@@ -3304,7 +3427,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "R":
 
         try:
-            account = telegraph("revokeAccessToken", access_token=token)
+            account = await telegraph("revokeAccessToken", access_token=token)
 
         except Exception as error:
             await query.message.reply_text(f"Could not revoke:\n{error}")
@@ -3403,7 +3526,7 @@ async def on_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         # Omitted fields are preserved by Telegraph, so send only this one.
-        telegraph("editAccountInfo", access_token=token, **{field: value})
+        await telegraph("editAccountInfo", access_token=token, **{field: value})
 
     except Exception as error:
         await update.message.reply_text(f"Could not update:\n{error}")
@@ -3447,20 +3570,84 @@ async def register_commands(app):
     ])
 
 
-def main():
+async def on_error(update, context):
+    """
+    Anything a handler did not expect. Without this an exception vanishes
+    and the person who typed the command is left looking at nothing.
+    """
 
-    # Keep message content and tokens out of the logs. Without this, httpx
-    # logs every request URL at INFO, which would include access tokens.
-    logging.basicConfig(level=logging.WARNING)
+    log.exception("handler.failed", exc_info=context.error)
+
+    message = getattr(update, "effective_message", None)
+
+    if message:
+        try:
+            await message.reply_text(
+                "Something went wrong at our end. Nothing was changed - "
+                "try again, and if it keeps happening the problem is "
+                "probably Telegraph rather than you."
+            )
+        except Exception:
+            pass
+
+    if OPERATOR_CHAT:
+        try:
+            await context.bot.send_message(
+                OPERATOR_CHAT,
+                f"Telepatch error: {type(context.error).__name__}: {context.error}"[:3500],
+            )
+        except Exception:
+            pass
+
+
+async def heartbeat(context):
+    """
+    A dead man's switch. Long polling opens no port, so nothing outside can
+    check whether this is alive - it has to say so itself, and silence is
+    what raises the alarm.
+    """
+
+    try:
+        await asyncio.to_thread(SESSION.get, HEARTBEAT_URL, timeout=10)
+
+    except Exception as error:
+        log.warning("heartbeat.failed error=%s", error)
+
+
+async def on_start(app):
+    await register_commands(app)
+    log.info("telepatch.started polling=1 heartbeat=%s operator=%s",
+             bool(HEARTBEAT_URL), bool(OPERATOR_CHAT))
+
+
+def main():
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL, logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
+    # Applied to the handlers, so it catches records from every logger -
+    # including httpx, which logs request URLs containing access tokens.
+    for handler in logging.getLogger().handlers:
+        handler.addFilter(Redact())
+
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("telegram").setLevel(logging.WARNING)
 
     app = (
         Application.builder()
         .token(TELEGRAM_TOKEN)
-        .post_init(register_commands)
+        # Without this, updates are handled strictly one at a time and a
+        # single /site freezes everyone else's /post for its duration.
+        .concurrent_updates(True)
+        .post_init(on_start)
         .build()
     )
+
+    app.add_error_handler(on_error)
+
+    if HEARTBEAT_URL:
+        app.job_queue.run_repeating(heartbeat, interval=HEARTBEAT_SECONDS, first=5)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("howto", howto))
@@ -3494,9 +3681,10 @@ def main():
         )
     )
 
-    print("TelepatchBot running")
-
-    app.run_polling()
+    # Only one process may poll a token at a time, so a deploy has to stop
+    # before it starts. Dropping pending updates on boot means a restart
+    # does not replay whatever queued up while it was down.
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
