@@ -258,6 +258,13 @@ hands out the right links.
 
 ---
 
+## Notes
+
+- [More than one collection](docs/multiple-collections.md) — what it would
+  take for one token to own several indexes. Written down, not decided.
+
+---
+
 ## In the browser
 
 `extension/` is a Chromium extension that saves the page you are on into a
