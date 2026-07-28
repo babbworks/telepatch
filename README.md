@@ -260,8 +260,10 @@ hands out the right links.
 
 ## Notes
 
-- [More than one collection](docs/multiple-collections.md) — what it would
-  take for one token to own several indexes. Written down, not decided.
+- [More than one collection](docs/multiple-collections.md) — one token,
+  several collections, and the way back out of it.
+- [Performance](docs/performance.md) — where the requests go, what they
+  cost, and a register of what to tighten next.
 
 ---
 
