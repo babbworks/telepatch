@@ -272,9 +272,14 @@ def find_token(message):
 
         if entity.url.startswith(CARRIER):
 
-            token = entity.url.partition("#")[2].partition(":")[2]
+            # Stop at the "?": a carrier may hold extras after the token,
+            # and taking everything past the colon swallowed them into it.
+            # The malformed token then had the extras appended a second
+            # time when the next carrier was built.
+            token = entity.url.partition("#")[2].partition(":")[2] \
+                .partition("?")[0]
 
-            if token:
+            if TOKEN_RE.fullmatch(token):
                 return token
 
         if "?start=" in entity.url:
