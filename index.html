@@ -213,6 +213,24 @@ main{padding-block-end:6rem;min-height:0;flex:1 0 auto}
 .search::placeholder{color:var(--graphite)}
 .count{font-family:var(--mono);font-size:.7rem;color:var(--graphite);white-space:nowrap}
 
+/* Repositories are not posts. They are standing resources rather than
+   things published on a date, and a site is meant to collect them freely,
+   so they sit above the reading list as a row that grows sideways instead
+   of pushing the writing down the page. */
+.shelf{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 2rem}
+.tools.tight{margin-bottom:1rem}
+.chip{
+  display:inline-flex;align-items:baseline;gap:.55rem;
+  padding:.45rem .8rem;
+  background:var(--panel);
+  border:1px solid var(--hair);border-radius:.2rem;
+  font-family:var(--mono);font-size:.78rem;line-height:1.3;
+  color:var(--ink);text-decoration:none;
+}
+.chip:hover{border-color:var(--patch);color:var(--patch)}
+.chip .who{font-size:.66rem;color:var(--graphite)}
+.chip:hover .who{color:var(--patch)}
+
 .index{list-style:none;margin:0;padding:0}
 .item{padding:1.15rem 0;border-bottom:1px solid var(--hair)}
 .item a{
@@ -687,6 +705,10 @@ function ghResource(url) {
 
 const isGh = path => typeof path === "string" && path.startsWith("gh:");
 const isTree = path => typeof path === "string" && path.startsWith("ght:");
+
+// "gh:owner/repo" and nothing further is a repository; anything longer is
+// one file inside one.
+const isRepoPath = path => isGh(path) && path.slice(3).split("/").length === 2;
 
 /* Files that are not worth fetching as text. */
 const BINARY = new Set(["png","jpg","jpeg","gif","webp","ico","bmp","pdf","zip",
@@ -1341,7 +1363,7 @@ function splitAside(content) {
 
 const boot = $("boot");
 let master = null, masterPage = null;
-let posts = [], navItems = [], cats = [], navPaths = new Set();
+let posts = [], repos = [], navItems = [], cats = [], navPaths = new Set();
 let masthead = [], sitefoot = [];
 let bylineMode = "linked";
 let currentArticle = null;
@@ -1391,10 +1413,32 @@ function showIndex() {
   const count = el("span", "count");
   count.id = "count";
   tools.append(search, count);
+  view.appendChild(tools);
+
+  // Not filtered by the search or the category dropdown: a shelf is meant
+  // to stay where it was put, and it holds too few things to hunt through.
+  if (repos.length) {
+    tools.classList.add("tight");
+    const shelf = el("div", "shelf");
+
+    for (const e of repos) {
+      const [owner, repo] = e.path.slice(3).split("/");
+      const mark = owner + "/" + repo;
+
+      const a = el("a", "chip");
+      a.href = link(master, e.path);
+      a.append(e.title);
+      if (e.title !== repo && e.title !== mark) {
+        a.appendChild(el("span", "who", mark));
+      }
+      shelf.appendChild(a);
+    }
+    view.appendChild(shelf);
+  }
 
   const list = el("ul", "index");
   list.id = "index";
-  view.append(tools, list);
+  view.appendChild(list);
   paint();
 }
 
@@ -1623,7 +1667,10 @@ async function showGithub(resource) {
   const view = $("view");
   view.replaceChildren(el("p", "loading", "fetching " + resource.slice(3) + "…"));
 
+  // Repositories were lifted out of posts to sit on the shelf, so all
+  // three lists have to be searched for the entry that named this one.
   const entry = posts.find(e => e.path === resource) ||
+                repos.find(e => e.path === resource) ||
                 navItems.find(e => e.path === resource);
 
   // "owner/repo" and nothing further is the repository itself, which leads
@@ -2038,10 +2085,14 @@ async function start(r) {
   const entries = parsed.entries;
   navItems = entries.filter(isNav);
   navPaths = new Set(navItems.map(e => e.path).filter(Boolean));
-  posts = entries.filter(e => !isNav(e));
+
+  const listed = entries.filter(e => !isNav(e));
+  repos = listed.filter(e => isRepoPath(e.path));
+  posts = listed.filter(e => !isRepoPath(e.path));
 
   await say(entries.length + " links · " + posts.length + " posts · " +
-            navItems.length + " pages");
+            navItems.length + " pages" +
+            (repos.length ? " · " + plural(repos.length, "repo") : ""));
 
   const counts = new Map();
   for (const e of posts) for (const c of shown(e)) counts.set(c, (counts.get(c) || 0) + 1);
