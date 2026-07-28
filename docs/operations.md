@@ -67,7 +67,7 @@ command; nothing secret can reach a log.
 - **Fail fast at startup** on missing or malformed config, not on first
   use.
 
-## Phase 3 — Hosting · ready, not yet migrated
+## Phase 3 — Hosting · running under systemd here; VM pending
 
 **A small VPS, systemd, long polling.** About $5 a month.
 
@@ -76,8 +76,17 @@ certificate, no domain, no reverse proxy, nothing exposed. Webhooks would
 buy latency and scale this has no use for, in exchange for a public
 endpoint to secure. Not worth it.
 
-- `telepatch-bot.service` is hardened for access already; it now also has
-  `MemoryMax`, `CPUQuota` and a watchdog.
+Two units, because the two cases are genuinely different:
+
+- **`telepatch-bot.user.service`** — a machine you already log into. No
+  root anywhere; `loginctl enable-linger` is what makes it start at boot
+  and survive logout. This is what runs today.
+- **`telepatch-bot.service`** — a dedicated machine. Its own user, the
+  full sandbox, an `.env` owned by root. See
+  [server-setup.md](server-setup.md).
+
+Both are hardened for access already, and both have `MemoryMax`, task
+limits and a watchdog.
 - **Only one process may poll a token at a time.** No rolling deploys —
   stop, then start. Two bots on one token looks like random message loss,
   which is a miserable thing to debug.

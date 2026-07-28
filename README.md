@@ -275,6 +275,8 @@ hands out the right links.
 
 - [Running this properly](docs/operations.md) — the staged plan, and what
   is done.
+- [Setting up a server](docs/server-setup.md) — a VM or a VPS, start to
+  finish, in about twenty minutes.
 - [Runbook](docs/runbook.md) — restart, logs, token rotation, and what to
   do when something was written wrong.
 - [Performance](docs/performance.md) — where the requests go, what they
