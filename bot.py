@@ -2849,6 +2849,17 @@ def marker_node(mode=BYLINE_DEFAULT, extra=False):
     return {"tag": "p", "children": [f"{MASTER_MARK} {fields}"]}
 
 
+def is_retired(content):
+    """
+    True if this page has been taken out of service, however that was
+    done. /retire replaces the marker outright, but retiring by hand in
+    the Telegraph editor leaves the original line and adds this one beside
+    it, so the whole page is checked rather than the marker alone.
+    """
+
+    return any(RETIRED_MARK in node_text(node) for node in content or [])
+
+
 def kept_marker(content, mode=None):
     """
     The marker line for a page being rewritten.
@@ -2856,8 +2867,12 @@ def kept_marker(content, mode=None):
     Five different commands rewrite an index and each one rebuilds this
     line. Every one of them has to carry across what it did not come to
     change, or editing the footer of a collection would quietly demote it
-    to the primary.
+    to the primary - or bring a retired one back, since split_master
+    strips both marks and only one would be written back.
     """
+
+    if is_retired(content):
+        return {"tag": "p", "children": [RETIRED_MARK]}
 
     return marker_node(mode or read_byline(content), extra=is_extra(content))
 
