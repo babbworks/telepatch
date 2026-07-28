@@ -258,6 +258,19 @@ hands out the right links.
 
 ---
 
+## In the browser
+
+`extension/` is a Chromium extension that saves the page you are on into a
+collection: a floating button, a panel, and one `editPage` call. It writes
+the same entry format the bot writes, to the same master post, so a page
+saved while browsing lands on the site next to everything else.
+
+It is the one place Telepatch stores a token, because an extension has
+nobody to hand it to between clicks. [extension/README.md](extension/README.md)
+says what that changes.
+
+---
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
