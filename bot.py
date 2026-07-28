@@ -1250,12 +1250,35 @@ async def privacy(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def token_for(update, context):
     """
     Prefer a pasted token, fall back to whatever the reply points at.
+
+    A pasted token is recognised by its shape, never by its position.
+    Several commands take words in the same place - /site and /newsite a
+    title, /byline a mode - and taking the first of them as a token sent
+    Telegraph the word "Browser" and got back ACCESS_TOKEN_INVALID.
     """
 
     if context.args:
-        return context.args[0].strip()
+
+        first = context.args[0].strip()
+
+        if TOKEN_RE.fullmatch(first):
+            return first
 
     return find_token(update.message)
+
+
+def command_words(context):
+    """
+    The words after a command, with a pasted token dropped from the front
+    so it cannot end up inside a title.
+    """
+
+    args = list(context.args or [])
+
+    if args and TOKEN_RE.fullmatch(args[0].strip()):
+        args = args[1:]
+
+    return " ".join(args).strip()
 
 
 async def manage(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1845,11 +1868,9 @@ async def site(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     _, _, extras = read_carrier(update.message)
 
-    title = " ".join(context.args).strip() if context.args else None
-
-    if title and TOKEN_RE.fullmatch(title):
-        # The token was pasted as the argument, not a title.
-        title = None
+    # A pasted token is dropped, so "/site <token> A Name" names the site
+    # rather than calling it after the token.
+    title = command_words(context) or None
 
     await rebuild_site(
         update.message,
@@ -1933,10 +1954,7 @@ async def newsite(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    title = " ".join(context.args).strip() if context.args else ""
-
-    if title and TOKEN_RE.fullmatch(title):
-        title = ""
+    title = command_words(context)
 
     if not title:
         await update.message.reply_text(
