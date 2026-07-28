@@ -29,7 +29,8 @@ not a limitation worked around; it is the reason there is nothing to leak.
 The website inherits the same property. It is one HTML file that fetches one
 public Telegraph page. No account, no cookies, no analytics, and no
 third-party requests at all — system fonts only, and `api.telegra.ph` is the
-sole network call.
+only host it calls. Opening a code file also loads `hljs.min.js`, which is
+served from this site, not a CDN.
 
 ### What it does not protect you from
 
@@ -159,12 +160,15 @@ every folder after the first costs nothing at all. File contents come from
 limited.
 
 Markdown files render as prose. Anything else is shown as code, highlighted
-by a small lexer written for this project: comments, strings, numbers and
-keywords across about fifteen languages. Loading a highlighter from a CDN
-would break the promise that this page makes no third-party requests, and
-vendoring one would put more unaudited code in the repository than there is
-Telepatch. Images are displayed; other binaries and anything over 400 kB
-are linked to rather than pulled in.
+by [highlight.js](https://highlightjs.org) 11.11.1 (BSD-3-Clause), vendored
+here as `hljs.min.js` — 128 kB, 43 kB over the wire — rather than loaded from
+a CDN, so the no-third-party-requests promise survives. It is fetched the
+first time somebody opens a code file and never on the index. It wears this
+site's palette instead of its own theme, and its output is copied across a
+span-and-text whitelist rather than assigned as HTML. If the script does not
+arrive, a small lexer written for this project takes over: comments,
+strings, numbers and keywords. Images are displayed; other binaries and
+anything over 400 kB are linked to rather than pulled in.
 
 The tree API is the only rate-limited call in any of this — 60 an hour, per
 reader.

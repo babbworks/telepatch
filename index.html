@@ -10,7 +10,8 @@
    Telepatch — telephone-exchange palette. Enamelled steel, bakelite
    ink, patch-cord green, and one indicator lamp used only for live
    and active states. System fonts only: the site makes zero
-   third-party requests, which is the point.
+   third-party requests, which is the point. The one script it loads,
+   highlight.js, is served from this site and only on code pages.
 ----------------------------------------------------------------*/
 :root{
   --paper:#E8EAE6;
@@ -217,19 +218,28 @@ main{padding-block-end:6rem;min-height:0;flex:1 0 auto}
    things published on a date, and a site is meant to collect them freely,
    so they sit above the reading list as a row that grows sideways instead
    of pushing the writing down the page. */
-.shelf{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 2rem}
+.shelf{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin:0 0 2rem}
 .tools.tight{margin-bottom:1rem}
+
+/* One mark for the row rather than one per button: it labels where all of
+   these live, and repeating it would only crowd the addresses. */
+.ghmark{
+  flex:none;width:1.15rem;height:1.15rem;
+  margin-right:.3rem;color:var(--graphite);
+}
 .chip{
-  display:inline-flex;align-items:baseline;gap:.55rem;
-  padding:.45rem .8rem;
+  display:inline-flex;align-items:baseline;
+  padding:.4rem .75rem;
   background:var(--panel);
   border:1px solid var(--hair);border-radius:.2rem;
-  font-family:var(--mono);font-size:.78rem;line-height:1.3;
+  font-family:var(--mono);line-height:1.25;
   color:var(--ink);text-decoration:none;
 }
 .chip:hover{border-color:var(--patch);color:var(--patch)}
-.chip .who{font-size:.66rem;color:var(--graphite)}
-.chip:hover .who{color:var(--patch)}
+/* The owner is context; the repository is the name of the thing. */
+.chip .ns{font-size:.75rem;color:var(--graphite)}
+.chip .repo{font-size:.95rem;font-weight:700}
+.chip:hover .ns{color:var(--patch)}
 
 .index{list-style:none;margin:0;padding:0}
 .item{padding:1.15rem 0;border-bottom:1px solid var(--hair)}
@@ -379,14 +389,43 @@ main{padding-block-end:6rem;min-height:0;flex:1 0 auto}
 .body tbody tr:last-child td{border-bottom:0}
 .body td code{white-space:nowrap}
 
-/* Four token colours, drawn from the exchange palette rather than added
-   to it. Quiet enough to read a whole file through. */
-:root{--tok-num:#7A5B2E;--tok-key:#5B3E6B}
-@media (prefers-color-scheme:dark){:root{--tok-num:#C9A96A;--tok-key:#B79BC7}}
+/* Token colours drawn from the exchange palette rather than added to it,
+   and kept few. Quiet enough to read a whole file through. */
+:root{
+  --tok-num:#7A5B2E; --tok-key:#5B3E6B;
+  --tok-fn:#2B5D7D;  --tok-type:#7A3E5B;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --tok-num:#C9A96A; --tok-key:#B79BC7;
+    --tok-fn:#8FC1E3;  --tok-type:#D79BB8;
+  }
+}
+
+/* The fallback lexer's four classes. */
 .tk-c{color:var(--graphite);font-style:italic}
 .tk-s{color:var(--patch)}
 .tk-n{color:var(--tok-num)}
 .tk-k{color:var(--tok-key)}
+
+/* highlight.js, wearing this site's colours instead of shipping its own
+   theme - a stylesheet built for a different palette would fight the page
+   in dark mode and win. */
+.hljs-comment,.hljs-quote{color:var(--graphite);font-style:italic}
+.hljs-string,.hljs-regexp,.hljs-addition,.hljs-char.escape_,
+.hljs-template-variable,.hljs-subst{color:var(--patch)}
+.hljs-number,.hljs-literal,.hljs-symbol,.hljs-bullet{color:var(--tok-num)}
+.hljs-keyword,.hljs-selector-tag,.hljs-built_in,.hljs-meta,
+.hljs-doctag,.hljs-operator{color:var(--tok-key)}
+.hljs-title,.hljs-section,.hljs-name,.hljs-selector-id,
+.hljs-selector-class,.hljs-selector-attr,.hljs-selector-pseudo,
+.hljs-attr,.hljs-attribute,.hljs-property,
+.hljs-variable{color:var(--tok-fn)}
+.hljs-type,.hljs-params,.hljs-tag,.hljs-title.class_{color:var(--tok-type)}
+.hljs-deletion{color:var(--lamp)}
+.hljs-emphasis{font-style:italic}
+.hljs-strong{font-weight:700}
+.hljs-link{text-decoration:underline}
 
 /* ---- repository listing ---- */
 .crumb{
@@ -912,11 +951,105 @@ function parseMaster(content) {
 
 /* ---------- syntax highlighting ----------
 
-   Ours, not a library. Loading one from a CDN would break the promise
-   that this page makes no third-party requests, and vendoring highlight.js
-   would put 120kB of unaudited code in a repository whose pitch is "read
-   the source". Comments, strings, numbers and keywords cover most of what
-   the eye is actually using; anything cleverer is not worth the weight.
+   highlight.js does the work, served from this site rather than a CDN.
+   The promise is that nothing here reaches a third party, not that the
+   page never loads anything: hljs.min.js is one same-origin request, made
+   the first time somebody opens a code file and never on the index.
+
+   What follows it is a small lexer of our own - comments, strings,
+   numbers, keywords - kept as the fallback for when that script does not
+   arrive. It is worse, and on a site whose point is reading code, worse
+   beats blank. */
+
+const HLJS_SRC = "hljs.min.js";
+let hljsReady = null;
+
+function loadHljs() {
+  if (hljsReady) return hljsReady;
+
+  hljsReady = new Promise(resolve => {
+    if (window.hljs) { resolve(window.hljs); return; }
+
+    const script = document.createElement("script");
+    script.src = HLJS_SRC;
+    script.onload = () => resolve(window.hljs || null);
+    script.onerror = () => resolve(null);
+    document.head.appendChild(script);
+  });
+
+  return hljsReady;
+}
+
+const HL_LANG = {
+  js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascript",
+  ts: "typescript", tsx: "typescript", json: "json",
+  py: "python", rb: "ruby", go: "go", rs: "rust", lua: "lua", r: "r",
+  java: "java", kt: "kotlin", swift: "swift", cs: "csharp", vb: "vbnet",
+  c: "c", h: "c", cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp",
+  m: "objectivec", mm: "objectivec", php: "php", pl: "perl", pm: "perl",
+  sh: "bash", bash: "bash", zsh: "bash", ksh: "bash",
+  css: "css", scss: "scss", sass: "scss", less: "less",
+  html: "xml", htm: "xml", xml: "xml", svg: "xml", rss: "xml",
+  yml: "yaml", yaml: "yaml", ini: "ini", toml: "ini", cfg: "ini", conf: "ini",
+  sql: "sql", md: "markdown", markdown: "markdown",
+  diff: "diff", patch: "diff", graphql: "graphql", gql: "graphql",
+  wat: "wasm", wast: "wasm"
+};
+
+const hlLang = name => {
+  const base = name.split("/").pop().toLowerCase();
+  if (base === "makefile" || base.endsWith(".mk")) return "makefile";
+  if (base === "dockerfile" || base.startsWith(".env")) return "bash";
+  if (base.startsWith(".git") || base === ".editorconfig") return "ini";
+  return HL_LANG[base.split(".").pop()] || null;
+};
+
+/* highlight.js hands back a string of markup rather than nodes. It is
+   parsed inside a <template>, which is inert - nothing in it runs, loads
+   or fires - and then copied across a span-and-text whitelist. So a file
+   in somebody's repository stays a file, and cannot become markup on this
+   page even if the library one day gets its escaping wrong. */
+function hlNodes(html, parent) {
+  const holder = document.createElement("template");
+  holder.innerHTML = html;
+
+  const copy = (from, to) => {
+    for (const node of from.childNodes) {
+      if (node.nodeType === 3) { to.append(node.data); continue; }
+      if (node.nodeType !== 1 || node.tagName !== "SPAN") continue;
+
+      // hljs's whole vocabulary: a token class, a nested-language marker,
+      // and the trailing-underscore modifiers it compounds onto titles.
+      const cls = (node.getAttribute("class") || "").split(/\s+/)
+        .filter(c => /^(?:hljs-[a-z_-]+|language-[a-z0-9+#.-]+|[a-z]+_{1,2})$/.test(c))
+        .join(" ");
+
+      const span = el("span", cls || null);
+      copy(node, span);
+      to.appendChild(span);
+    }
+  };
+
+  copy(holder.content, parent);
+}
+
+async function paintCode(src, name, pre) {
+  const lib = await loadHljs();
+  const lang = hlLang(name);
+
+  if (lib && lang && lib.getLanguage(lang)) {
+    try {
+      hlNodes(lib.highlight(src, { language: lang, ignoreIllegals: true }).value, pre);
+      return;
+    } catch (err) {
+      // Fall through: a grammar that throws is not worth an empty page.
+    }
+  }
+
+  highlight(src, langOf(name), pre);
+}
+
+/* ---------- the fallback lexer ----------
 
    Built as elements, never innerHTML, so a file's contents can never be
    markup here. */
@@ -1385,6 +1518,24 @@ function matches(e) {
 
 /* ---------- views ---------- */
 
+/* The GitHub mark, drawn inline. A page that promises to make no outside
+   requests cannot go and fetch an icon, and an inline path costs nothing
+   to cache because it is already in the file. */
+function ghMark() {
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("class", "ghmark");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+
+  const path = document.createElementNS(NS, "path");
+  path.setAttribute("fill", "currentColor");
+  path.setAttribute("d", "M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z");
+  svg.appendChild(path);
+  return svg;
+}
+
 function showIndex() {
   currentArticle = null;
   document.title = masterPage.title;
@@ -1420,17 +1571,19 @@ function showIndex() {
   if (repos.length) {
     tools.classList.add("tight");
     const shelf = el("div", "shelf");
+    shelf.appendChild(ghMark());
 
     for (const e of repos) {
       const [owner, repo] = e.path.slice(3).split("/");
-      const mark = owner + "/" + repo;
 
       const a = el("a", "chip");
       a.href = link(master, e.path);
-      a.append(e.title);
-      if (e.title !== repo && e.title !== mark) {
-        a.appendChild(el("span", "who", mark));
-      }
+      // The entry's own title is held back for now — an address says what
+      // this is more plainly than a headline does. It stays on the page
+      // itself, and here as the tooltip.
+      a.title = e.title;
+      a.appendChild(el("span", "ns", owner + "/"));
+      a.appendChild(el("span", "repo", repo));
       shelf.appendChild(a);
     }
     view.appendChild(shelf);
@@ -1687,7 +1840,7 @@ async function showGithub(resource) {
     // without a README. A file that will not load is a dead end.
     if (!isRepo) {
       view.replaceChildren();
-      view.appendChild(backLink());
+      view.appendChild(backLink(resource));
       view.appendChild(el("p", "empty", "Could not read that repository — " + err.message));
       return;
     }
@@ -1699,7 +1852,7 @@ async function showGithub(resource) {
   document.title = title + " · " + masterPage.title;
 
   view.replaceChildren();
-  if (!isPage) view.appendChild(backLink());
+  if (!isPage) view.appendChild(backLink(resource));
 
   const art = el("article", "article" + (isPage ? " bare" : ""));
   art.appendChild(el("h1", null, title));
@@ -1766,8 +1919,7 @@ async function showGithub(resource) {
     body.appendChild(p);
   } else if (doc.code) {
     const pre = el("pre", "code");
-    const lang = langOf(doc.name);
-    highlight(doc.text, lang, pre);
+    await paintCode(doc.text, doc.name, pre);
     body.appendChild(pre);
   } else {
     renderMarkdown(doc.text, body, base);
@@ -1906,7 +2058,7 @@ async function showTree(resource) {
 
   document.title = repo + " · " + masterPage.title;
   view.replaceChildren();
-  view.appendChild(backLink());
+  view.appendChild(backLink(resource));
 
   const art = el("article", "article");
   repoCrumb(owner, repo, dir, art);
@@ -1928,9 +2080,27 @@ function fmtSize(bytes) {
   return (bytes / 1048576).toFixed(1) + " MB";
 }
 
-function backLink() {
+/* One screen up, not all the way out. Inside a repository that is the
+   directory the reader was just looking at; the crumb above the listing
+   already says where that is. Returns null at a repository's own page,
+   where up really is the index. */
+function backTarget(resource) {
+  const tree = isTree(resource);
+  if (!tree && !isGh(resource)) return null;
+
+  const [owner, repo, ...rest] = resource.slice(tree ? 4 : 3).split("/");
+  if (!rest.length) return null;
+
+  rest.pop();
+  return rest.length
+    ? "ght:" + owner + "/" + repo + "/" + rest.join("/")
+    : "gh:" + owner + "/" + repo;
+}
+
+function backLink(resource) {
+  const up = resource ? backTarget(resource) : null;
   const a = el("a", "back", "\u2190\u00a0 back");
-  a.href = link(master);
+  a.href = link(master, up);
   return a;
 }
 
