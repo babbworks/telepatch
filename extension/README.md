@@ -8,6 +8,26 @@ writes to the same master post `/site` writes.
 click the T  →  pick a collection  →  Save
 ```
 
+Or write something new. **New** in the panel header widens it into a
+writing surface, keeping the same fields — collection, title, categories —
+with the post underneath. Publishing creates a Telegraph page and adds it
+to the collection in one go, with the reading time counted and the opening
+paragraph taken as the excerpt.
+
+The markers are the same ones `/post` uses, so nothing has to be learned
+twice:
+
+```
+## a heading          ### a subheading          > a quote
+
+An image URL alone on a line becomes a picture; words after it are
+the caption. A blank line starts a new paragraph.
+```
+
+Writing is kept in `chrome.storage.local` as you type and restored when
+the panel reopens. A half-written post should survive a stray click, a
+navigation, or a closed tab.
+
 ## Install
 
 Chrome or any Chromium browser, unpacked:
@@ -28,8 +48,8 @@ them at once.
 | | |
 |---|---|
 | Reads | `getAccountInfo`, `getPageList`, `getPage` |
-| Writes | `editPage` — one entry spliced to the top of the list |
-| Stores | `{label, token, path}` per collection, in `chrome.storage.local` |
+| Writes | `createPage` when you publish, `editPage` to splice one entry to the top of the list |
+| Stores | `{label, token, path}` per collection, and the draft you are writing, in `chrome.storage.local` |
 | Sends anywhere else | nothing |
 
 An entry is written in the same shape the bot writes, so `/site` keeps it

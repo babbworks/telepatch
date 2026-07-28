@@ -133,20 +133,19 @@ async function lookup({ path, url }) {
   return { saved, title: page.title };
 }
 
-async function save({ id, url, title, cats, note }) {
-  const collections = await store.all();
-  const collection = collections.find(c => c.id === id);
-
-  if (!collection) throw new Error("That collection is no longer set up");
-
+/* One entry at the top of the list, in the shape the bot writes, so /site
+   keeps it on the next rebuild and the website reads it as an ordinary
+   item. Minutes are omitted for a saved page - the length of somebody
+   else's writing is not ours to claim - and included for a post, where we
+   counted the words ourselves. */
+async function spliceEntry(collection, { url, title, cats, note, minutes }) {
   const page = await master(collection.path, true);
   const { head, list, foot, marker } = splitMaster(page.content);
 
   const children = [{ tag: "a", attrs: { href: url }, children: [title] }];
 
-  // Dated today so it sorts newest. No reading time: the length of
-  // somebody else's page is not ours to claim.
   let meta = SEP + new Date().toISOString().slice(0, 10);
+  if (minutes) meta += " · " + minutes + " min";
   if (cats.length) meta += " · " + cats.join(", ");
   children.push(meta);
 
@@ -171,6 +170,119 @@ async function save({ id, url, title, cats, note }) {
 
   cache.delete(collection.path);
   return { title: page.title };
+}
+
+function collectionFor(collections, id) {
+  const found = collections.find(c => c.id === id);
+  if (!found) throw new Error("That collection is no longer set up");
+  return found;
+}
+
+async function save({ id, url, title, cats, note }) {
+  const collection = collectionFor(await store.all(), id);
+  return spliceEntry(collection, { url, title, cats, note, minutes: 0 });
+}
+
+/* ---------- writing ---------- */
+
+const IMAGE_RE = /^(https?:\/\/\S+\.(?:png|jpe?g|gif|webp|svg))(?:\s+(.*))?$/i;
+
+// A single newline inside a block is a line break, not a new block.
+const asLines = text => {
+  const children = [];
+  text.split("\n").forEach((line, i) => {
+    if (i) children.push({ tag: "br" });
+    children.push(line);
+  });
+  return children;
+};
+
+/* Plain text into Telegraph nodes, using the same markers as /post so that
+   what somebody learns in the chat still works here. Blank lines separate
+   blocks; a single newline inside one stays a line break. */
+function compose(cats, body) {
+  const nodes = [];
+
+  // The site reads the first <aside> as the article's categories, which is
+  // also what Telegraph renders as a centred subtitle.
+  if (cats.length) nodes.push({ tag: "aside", children: [cats.join(", ")] });
+
+  for (const block of String(body).replace(/\r\n?/g, "\n").split(/\n{2,}/)) {
+    const text = block.trim();
+    if (!text) continue;
+
+    // Telegraph allows only h3 and h4, and the title holds the level above.
+    const heading = /^(#{1,3})\s+([\s\S]*)$/.exec(text);
+    if (heading) {
+      nodes.push({
+        tag: heading[1].length >= 3 ? "h4" : "h3",
+        children: [heading[2].trim()]
+      });
+      continue;
+    }
+
+    if (text.startsWith(">")) {
+      nodes.push({
+        tag: "blockquote",
+        children: asLines(text.replace(/^>[ \t]?/gm, "").trim())
+      });
+      continue;
+    }
+
+    const image = IMAGE_RE.exec(text);
+    if (image) {
+      const figure = { tag: "figure", children: [{ tag: "img", attrs: { src: image[1] } }] };
+      if (image[2]) figure.children.push({ tag: "figcaption", children: [image[2].trim()] });
+      nodes.push(figure);
+      continue;
+    }
+
+    nodes.push({ tag: "p", children: asLines(text) });
+  }
+
+  return nodes;
+}
+
+/* The opening prose, for the line under the title in the index. Headings,
+   quotes and pictures are skipped: an excerpt should read like the start
+   of the piece, not like its furniture. */
+function summarise(body) {
+  for (const block of String(body).replace(/\r\n?/g, "\n").split(/\n{2,}/)) {
+    const text = block.trim();
+    if (!text || /^[#>]/.test(text) || IMAGE_RE.test(text)) continue;
+
+    const flat = text.replace(/\s+/g, " ");
+    return flat.length > 220 ? flat.slice(0, 219).trimEnd() + "…" : flat;
+  }
+  return "";
+}
+
+async function publish({ id, title, cats, body }) {
+  const collection = collectionFor(await store.all(), id);
+
+  const clean = (title || "").trim();
+  if (!clean) throw new Error("A post needs a title");
+  if (!String(body).trim()) throw new Error("Nothing written yet");
+
+  // author_name is left out on purpose: Telegraph then uses the account's
+  // own, which is the one the site already shows.
+  const page = await telegraph("createPage", {
+    access_token: collection.token,
+    title: clean,
+    content: JSON.stringify(compose(cats, body))
+  });
+
+  const words = String(body).trim().split(/\s+/).filter(Boolean).length;
+
+  await spliceEntry(collection, {
+    url: "/" + page.path,          // relative, exactly as the bot writes it
+    title: clean,
+    cats,
+    note: summarise(body),
+    minutes: Math.max(1, Math.round(words / 200))
+  });
+
+  return { url: page.url, path: page.path };
 }
 
 async function connect({ token }) {
@@ -206,7 +318,7 @@ async function collections() {
   return (await store.all()).map(c => ({ id: c.id, label: c.label, who: c.who, path: c.path }));
 }
 
-const ACTIONS = { collections, connect, forget, save, lookup };
+const ACTIONS = { collections, connect, forget, save, lookup, publish };
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   const action = ACTIONS[msg && msg.type];

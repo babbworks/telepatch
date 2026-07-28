@@ -46,15 +46,34 @@ if (window.top === window && !document.getElementById("telepatch-root")) {
     background: #E8EAE6; border: 1px solid #C6CAC4; border-radius: 4px;
     box-shadow: 0 6px 28px rgba(0,0,0,.24);
     padding: 14px; display: block;
+    transition: width .16s ease, max-height .16s ease;
+  }
+  /* Writing wants room. Bounded by the viewport so the panel never runs
+     off a laptop screen or a phone held in portrait. */
+  .panel.wide {
+    width: min(620px, calc(100vw - 36px));
+    max-height: min(84vh, 760px);
   }
   .panel[hidden] { display: none; }
+  @media (prefers-reduced-motion: reduce) { .panel { transition: none; } }
 
   .head {
     display: flex; justify-content: space-between; align-items: baseline;
+    gap: 10px;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
     color: #5C6562; margin-bottom: 10px;
   }
+  .head .right { display: flex; align-items: baseline; gap: 12px; }
+  .mode {
+    cursor: pointer; color: #1C5A4E;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  }
+  .mode:hover { color: #C4342A; }
+  /* The all:initial rule above is an author rule, so it beats the user
+     agent's [hidden] { display: none }. Anything hideable says it again. */
+  .mode[hidden] { display: none; }
   .x { cursor: pointer; font-size: 15px; line-height: 1; color: #5C6562; }
   .x:hover { color: #C4342A; }
 
@@ -83,6 +102,18 @@ if (window.top === window && !document.getElementById("telepatch-root")) {
   button.go:hover { background: #14483E; }
   button.go[disabled] { background: #9AA39F; cursor: default; }
 
+  /* The writing surface. Serif at a readable size, because this is where
+     somebody composes rather than fills in a field. */
+  .write {
+    min-height: 300px; font-size: 15px; line-height: 1.62;
+    padding: 12px; margin-bottom: 8px;
+  }
+  .hint {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10px; line-height: 1.7; color: #5C6562; margin: 0 0 11px;
+  }
+  .hint b { font-weight: 700; color: #14181A; }
+
   .note { font-size: 12px; line-height: 1.5; color: #5C6562; margin: 0 0 10px; }
   .note a { color: #1C5A4E; text-decoration: underline; cursor: pointer; }
   .bad { color: #C4342A; }
@@ -93,13 +124,17 @@ if (window.top === window && !document.getElementById("telepatch-root")) {
 
 <div class="fab" title="Telepatch">T</div>
 <div class="panel" hidden>
-  <div class="head"><span>Telepatch</span><span class="x">&times;</span></div>
+  <div class="head">
+    <span>Telepatch</span>
+    <span class="right"><span class="mode">New</span><span class="x">&times;</span></span>
+  </div>
   <div class="body"></div>
 </div>`;
 
   const fab = root.querySelector(".fab");
   const panel = root.querySelector(".panel");
   const body = root.querySelector(".body");
+  const modeBtn = root.querySelector(".mode");
 
   const el = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -125,6 +160,23 @@ if (window.top === window && !document.getElementById("telepatch-root")) {
 
   let collections = [];
   let chosen = null;
+  let mode = "save";
+
+  /* Writing survives closing the panel, navigating away, and the tab being
+     shut. A half-written post lost to a stray click is the fastest way to
+     make somebody never use this again. */
+  let draft = { title: "", cats: "", body: "" };
+  let draftTimer = null;
+
+  const keepDraft = () => {
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(() => chrome.storage.local.set({ draft }), 400);
+  };
+
+  const clearDraft = () => {
+    draft = { title: "", cats: "", body: "" };
+    chrome.storage.local.remove("draft");
+  };
 
   async function draw() {
     body.replaceChildren();
@@ -136,8 +188,116 @@ if (window.top === window && !document.getElementById("telepatch-root")) {
       return;
     }
 
+    const writing = mode === "write" && collections.length > 0;
+
+    panel.classList.toggle("wide", writing);
+    modeBtn.hidden = !collections.length;
+    modeBtn.textContent = writing ? "← Save page" : "New";
+
     if (!collections.length) return drawSetup();
+
+    if (writing) {
+      const stored = await chrome.storage.local.get("draft");
+      if (stored.draft) draft = stored.draft;
+      return drawCompose();
+    }
+
     drawSave();
+  }
+
+  function pickCollection(onChange) {
+    if (!chosen || !collections.some(c => c.id === chosen)) chosen = collections[0].id;
+
+    const where = el("select");
+
+    for (const c of collections) {
+      const option = el("option", null, c.label + (c.who ? "  ·  " + c.who : ""));
+      option.value = c.id;
+      if (c.id === chosen) option.selected = true;
+      where.appendChild(option);
+    }
+
+    where.addEventListener("change", () => {
+      chosen = where.value;
+      if (onChange) onChange();
+    });
+
+    return where;
+  }
+
+  function drawCompose() {
+    const where = pickCollection();
+
+    const title = el("input");
+    title.value = draft.title;
+    title.placeholder = "Title";
+
+    const cats = el("input");
+    cats.value = draft.cats;
+    cats.placeholder = "notes, drafts";
+
+    const write = el("textarea", "write");
+    write.value = draft.body;
+    write.placeholder = "Write here. A blank line starts a new paragraph.";
+
+    for (const [field, key] of [[title, "title"], [cats, "cats"], [write, "body"]]) {
+      field.addEventListener("input", () => { draft[key] = field.value; keepDraft(); });
+    }
+
+    // The same markers as /post, so what somebody learns in the chat still
+    // works here.
+    const hint = el("p", "hint");
+    const mark = t => el("b", null, t);
+    hint.append(
+      mark("##"), " heading   ", mark("###"), " subheading   ", mark(">"), " quote",
+      document.createElement("br"),
+      "An image URL alone on a line becomes a picture."
+    );
+
+    const go = el("button", "go", "Publish to collection");
+    const status = el("p", "note");
+
+    go.addEventListener("click", async () => {
+      go.disabled = true;
+      status.className = "note";
+      status.textContent = "Publishing…";
+
+      try {
+        const { url } = await ask("publish", {
+          id: where.value,
+          title: title.value.trim(),
+          cats: cats.value.split(",").map(s => s.trim()).filter(Boolean),
+          body: write.value
+        });
+
+        clearDraft();
+        status.className = "note ok";
+        status.replaceChildren("Published. ");
+
+        const link = el("a", null, "Read it");
+        link.href = url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        status.appendChild(link);
+
+        title.value = ""; cats.value = ""; write.value = "";
+        go.disabled = false;
+      } catch (err) {
+        status.className = "note bad";
+        status.textContent = err.message;
+        go.disabled = false;
+      }
+    });
+
+    body.append(
+      el("label", null, "Collection"), where,
+      el("label", null, "Title"), title,
+      el("label", null, "Categories"), cats,
+      el("label", null, "Post"), write,
+      hint, go, status
+    );
+
+    title.focus();
   }
 
   function drawSetup() {
@@ -175,17 +335,8 @@ if (window.top === window && !document.getElementById("telepatch-root")) {
 
   function drawSave() {
     const seed = suggest();
-    if (!chosen || !collections.some(c => c.id === chosen)) chosen = collections[0].id;
-
     const status = el("p", "note");
-
-    const where = el("select");
-    for (const c of collections) {
-      const option = el("option", null, c.label + (c.who ? "  ·  " + c.who : ""));
-      option.value = c.id;
-      if (c.id === chosen) option.selected = true;
-      where.appendChild(option);
-    }
+    const where = pickCollection(() => check());
 
     const title = el("input");
     title.value = seed.title;
@@ -199,7 +350,6 @@ if (window.top === window && !document.getElementById("telepatch-root")) {
     const go = el("button", "go", "Save to collection");
 
     const check = async () => {
-      chosen = where.value;
       status.className = "note";
       status.textContent = "";
       fab.classList.remove("here");
@@ -216,8 +366,6 @@ if (window.top === window && !document.getElementById("telepatch-root")) {
         // A failed check is not worth an error: the save will say so.
       }
     };
-
-    where.addEventListener("change", check);
 
     go.addEventListener("click", async () => {
       go.disabled = true;
@@ -267,6 +415,11 @@ if (window.top === window && !document.getElementById("telepatch-root")) {
 
   fab.addEventListener("click", toggle);
   root.querySelector(".x").addEventListener("click", close);
+
+  modeBtn.addEventListener("click", () => {
+    mode = mode === "write" ? "save" : "write";
+    draw();
+  });
 
   addEventListener("keydown", e => {
     if (e.key === "Escape" && !panel.hidden) close();
