@@ -51,6 +51,7 @@ you should never need to paste it.
 | `/new` | Create an identity. `short name, author name, author url` |
 | `/post` | Publish. First line title, second line categories, then the body |
 | `/pages` | List what this identity has published |
+| `/repo` | Add a GitHub repository — its files, and its README |
 | `/revise` | Rewrite a post — reply to its **Published** message |
 | `/site` | Build or refresh the public index |
 | `/about` | Set the introduction shown above your index |
@@ -144,10 +145,16 @@ How this site is built — 2026-07-27 · code, live
 https://github.com/babbworks/telepatch
 ```
 
-Every GitHub article carries a **Browse all files** link. One request to
-GitHub's tree API returns the whole repository's structure — even CPython's
-6,435 entries come back untruncated — and it is cached, so every folder and
-file after that costs nothing extra. File contents come from
+`/repo` adds a whole repository. Give it `owner/repo` and nothing else and
+the title and description come from GitHub; add more lines to write them
+yourself.
+
+A repository's page leads with its contents and carries the README
+underneath — what is in here, then what it says. Folders open in place and
+files open as their own pages, so the repository is readable without leaving
+the site. One request to GitHub's tree API returns the whole structure —
+even CPython's 6,435 entries come back untruncated — and it is cached, so
+every folder after the first costs nothing at all. File contents come from
 `raw.githubusercontent.com`, which allows cross-origin reads and is not rate
 limited.
 
@@ -192,10 +199,25 @@ exists so `/site` can find the page again rather than creating a second one.
 ```
 https://babbworks.github.io/telepatch/#<master-path>
 https://babbworks.github.io/telepatch/#<master-path>/<article-path>
+https://babbworks.github.io/telepatch/#<master-path>/<article-path>/<section>
 ```
 
 The path lives in the **hash**, so it never reaches the server and appears in
 no access log. One `index.html` serves every publication.
+
+A GitHub resource is addressed the way GitHub addresses it — put `https://`
+in front of the second half and you have the page at the source:
+
+```
+…/#<master-path>/github.com/babbworks/telepatch
+…/#<master-path>/github.com/babbworks/telepatch/tree/HEAD/docs
+…/#<master-path>/github.com/babbworks/telepatch/blob/HEAD/bot.py
+```
+
+Separators are real `/` characters rather than escapes. An earlier version
+packed the resource into one segment with the slashes percent-encoded, which
+broke the moment anything in the chain decoded `%2F` — a terminal, a chat
+client, a URL normaliser — because the route then split in the wrong places.
 
 Articles are rebuilt from Telegraph's content nodes as real elements rather
 than iframed, so they take the site's typography and dark mode, and links

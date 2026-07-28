@@ -393,6 +393,17 @@ main{padding-block-end:6rem;min-height:0;flex:1 0 auto}
   font-family:var(--mono);font-size:.68rem;color:var(--graphite);
   white-space:nowrap;
 }
+/* A repository leads with its contents and carries the README underneath,
+   so the page answers "what is in here" before "what does it say". The
+   rule is what separates the two. */
+.seclabel{
+  font-family:var(--mono);font-size:.65rem;font-weight:400;
+  text-transform:uppercase;letter-spacing:.1em;
+  color:var(--graphite);margin:0 0 .9rem;
+}
+.seclabel.rule{
+  margin-top:2.8rem;padding-top:1.3rem;border-top:1px solid var(--hair);
+}
 .body pre.code{
   font-size:.8rem;line-height:1.6;
   max-height:none;white-space:pre;
@@ -511,30 +522,103 @@ const el = (tag, cls, text) => {
 };
 
 /* ---------- routing ----------
-   #master             the index
-   #master/article     one article, with the same bar and footer around it */
+   #master                                        the index
+   #master/article                                one Telegraph article
+   #master/article/section                        a heading within it
+   #master/github.com/o/r                         a repository's README
+   #master/github.com/o/r/blob/HEAD/src/x.py      one file
+   #master/github.com/o/r/tree/HEAD/src           a directory listing
+
+   A GitHub resource is written the way github.com writes it, so its
+   separators are real "/" characters and the address is legible on sight.
+   The first version packed the whole thing into a single segment —
+   "gh:owner/repo" with the slashes percent-escaped — which broke as soon as
+   anything in the chain decoded %2F back to "/": a terminal, a chat client,
+   a URL normaliser. The route then split at the wrong places and the site
+   went looking for a Telegraph page called "gh:owner". Structural slashes
+   cannot be corrupted that way.
+
+   Internally a resource is still "gh:owner/repo/path" for a file and
+   "ght:owner/repo/dir" for a listing. Only the URL spelling changes. */
+
+const GH_HOST = "github.com";
+
+// URL segments (after the master) -> internal resource id, else null.
+function ghFromParts(parts) {
+  // Links written before this change arrive either whole or, if something
+  // decoded the escaped slashes, already split. Either way, rejoining is
+  // right: no Telegraph path begins "gh:".
+  const first = parts[0] || "";
+  if (first.startsWith("gh:") || first.startsWith("ght:")) return parts.join("/");
+
+  if (first !== GH_HOST || parts.length < 3) return null;
+  const owner = parts[1], repo = parts[2];
+  const kind = parts[3];                  // "blob", "tree", or nothing
+  const rest = parts.slice(5).join("/");  // parts[4] is the git ref
+
+  if (kind === "tree") return "ght:" + owner + "/" + repo + (rest ? "/" + rest : "");
+  if (kind === "blob" && rest) return "gh:" + owner + "/" + repo + "/" + rest;
+  return "gh:" + owner + "/" + repo;      // bare repository: the README
+}
+
+/* Internal resource id -> URL segments. The ref is spelled out as HEAD so
+   that putting "https://" in front of the result is a working github.com
+   address — the same page, at the source. */
+function ghToParts(resource) {
+  if (isTree(resource)) {
+    const [owner, repo, ...rest] = resource.slice(4).split("/");
+    return [GH_HOST, owner, repo, "tree", "HEAD", ...rest];
+  }
+  const [owner, repo, ...rest] = resource.slice(3).split("/");
+  return rest.length ? [GH_HOST, owner, repo, "blob", "HEAD", ...rest]
+                     : [GH_HOST, owner, repo];
+}
+
+const isResource = path => isGh(path) || isTree(path);
 
 function route() {
   let h = location.hash.replace(/^#/, "").trim();
   h = h.split("?")[0].replace(/^https?:\/\/telegra\.ph\//i, "");
+
+  // A second "#" carries a heading, exactly as it would on github.com.
+  // location.hash keeps everything after the first one, so this one is ours.
+  let anchor = null;
+  const cut = h.indexOf("#");
+  if (cut >= 0) { anchor = h.slice(cut + 1) || null; h = h.slice(0, cut); }
+
   h = h.replace(/^\/+|\/+$/g, "");
   if (!h) return {};
 
-  // Decoded per segment, not all at once: a resource id like
-  // gh:owner/repo/docs/x.md contains slashes of its own.
+  // Decoded per segment, not all at once, so an escaped "/" inside a
+  // filename can never be mistaken for a separator.
   const parts = h.split("/").map(part => {
     try { return decodeURIComponent(part); } catch (err) { return part; }
   }).filter(Boolean);
 
-  return { master: parts[0], article: parts[1] || null, anchor: parts[2] || null };
+  const master = parts[0];
+  const resource = ghFromParts(parts.slice(1));
+  if (resource) return { master, article: resource, anchor };
+
+  // A heading also still reads as a third segment, the form this site used
+  // first, so links already shared keep working.
+  return { master, article: parts[1] || null, anchor: anchor || parts[2] || null };
 }
 
-/* A heading is a third path segment rather than a normal "#id" fragment,
-   because the fragment is already carrying the route. This way a link to a
-   section is a real, shareable URL instead of a scroll side effect. */
-const link = (master, article, anchor) =>
-  "#" + [master, article, anchor].filter(Boolean)
-    .map(encodeURIComponent).join("/");
+/* A heading in a Telegraph article is a third path segment rather than a
+   normal "#id" fragment, because the fragment is already carrying the
+   route. A GitHub resource has no segment left to spare — it has claimed
+   everything after "github.com" — so its headings use the second "#",
+   which is where a reader would expect to find them anyway. */
+const link = (master, article, anchor) => {
+  const parts = [master];
+  if (article) parts.push(...(isResource(article) ? ghToParts(article) : [article]));
+  if (anchor && !isResource(article)) parts.push(anchor);
+
+  const base = "#" + parts.filter(Boolean).map(encodeURIComponent).join("/");
+  return anchor && isResource(article)
+    ? base + "#" + encodeURIComponent(anchor)
+    : base;
+};
 
 /* ---------- Telegraph helpers ---------- */
 
@@ -1542,19 +1626,29 @@ async function showGithub(resource) {
   const entry = posts.find(e => e.path === resource) ||
                 navItems.find(e => e.path === resource);
 
-  let doc;
+  // "owner/repo" and nothing further is the repository itself, which leads
+  // with its file listing. A longer path is one file inside it.
+  const [owner, repo, ...rest] = resource.slice(3).split("/");
+  const isRepo = !rest.length;
+
+  let doc = null, failed = null;
   try {
     if (cache.has(resource)) doc = cache.get(resource);
     else { doc = await ghFetch(resource); cache.set(resource, doc); }
   } catch (err) {
-    view.replaceChildren();
-    view.appendChild(backLink());
-    view.appendChild(el("p", "empty", "Could not read that repository — " + err.message));
-    return;
+    // Now that the contents come first, a repository is still worth showing
+    // without a README. A file that will not load is a dead end.
+    if (!isRepo) {
+      view.replaceChildren();
+      view.appendChild(backLink());
+      view.appendChild(el("p", "empty", "Could not read that repository — " + err.message));
+      return;
+    }
+    failed = err.message;
   }
 
   const isPage = navPaths.has(resource);
-  const title = (entry && entry.title) || doc.repo;
+  const title = (entry && entry.title) || repo;
   document.title = title + " · " + masterPage.title;
 
   view.replaceChildren();
@@ -1565,8 +1659,8 @@ async function showGithub(resource) {
 
   if (!isPage) {
     const line = el("p", "byline");
-    const src = el("a", null, doc.owner + "/" + doc.repo);
-    src.href = "https://github.com/" + doc.owner + "/" + doc.repo;
+    const src = el("a", null, owner + "/" + repo);
+    src.href = "https://github.com/" + owner + "/" + repo;
     src.target = "_blank"; src.rel = "noopener noreferrer";
 
     const parts = [src, "live"];
@@ -1597,21 +1691,21 @@ async function showGithub(resource) {
     art.appendChild(row);
   }
 
-  if (doc.file) {
-    repoCrumb(doc.owner, doc.repo,
-      doc.name.split("/").slice(0, -1).join("/"), art);
+  if (isRepo) {
+    repoCrumb(owner, repo, "", art);
+    const counts = await appendListing(art, owner, repo, "");
+    if (counts) art.appendChild(repoOrigin(owner, repo, "", counts));
+    art.appendChild(el("h2", "seclabel rule", failed ? "No readme" : "Readme"));
   } else {
-    const browse = el("p", "crumb");
-    const a = el("a", null, "Browse all files →");
-    a.href = link(master, "ght:" + doc.owner + "/" + doc.repo);
-    browse.appendChild(a);
-    art.appendChild(browse);
+    repoCrumb(owner, repo, doc.name.split("/").slice(0, -1).join("/"), art);
   }
 
   const body = el("div", "body");
-  const base = "https://raw.githubusercontent.com/" + doc.owner + "/" + doc.repo + "/HEAD/";
+  const base = "https://raw.githubusercontent.com/" + owner + "/" + repo + "/HEAD/";
 
-  if (doc.binary && doc.image) {
+  if (failed) {
+    body.appendChild(el("p", null, "Nothing to read here — " + failed + "."));
+  } else if (doc.binary && doc.image) {
     const img = document.createElement("img");
     img.src = doc.src; img.alt = doc.name; img.loading = "lazy";
     body.appendChild(img);
@@ -1632,17 +1726,19 @@ async function showGithub(resource) {
     renderMarkdown(doc.text, body, base);
   }
 
-  const toc = doc.code ? null : buildToc(body, resource);
+  const toc = doc && !doc.code ? buildToc(body, resource) : null;
   if (toc) art.appendChild(toc);
   art.appendChild(body);
 
-  const origin = el("p", "origin");
-  const a = el("a", null, "github.com");
-  a.href = "https://github.com/" + doc.owner + "/" + doc.repo +
-           (doc.name ? "/blob/HEAD/" + doc.name : "");
-  a.target = "_blank"; a.rel = "noopener noreferrer";
-  origin.append("read live from ", a, " — this page shows whatever the repository says now.");
-  art.appendChild(origin);
+  if (!failed) {
+    const origin = el("p", "origin");
+    const a = el("a", null, "github.com");
+    a.href = "https://github.com/" + owner + "/" + repo +
+             (doc.name ? "/blob/HEAD/" + doc.name : "");
+    a.target = "_blank"; a.rel = "noopener noreferrer";
+    origin.append("read live from ", a, " — this page shows whatever the repository says now.");
+    art.appendChild(origin);
+  }
 
   view.appendChild(art);
   currentArticle = resource;
@@ -1672,30 +1768,24 @@ function repoCrumb(owner, repo, dir, art) {
     crumb.append(" / ");
     crumb.appendChild(step(part, at.join("/")));
   }
+  crumb.append(" /");
   art.appendChild(crumb);
 }
 
-async function showTree(resource) {
-  syncMeta();
-  const view = $("view");
-  const [owner, repo, ...rest] = resource.slice(4).split("/");
-  const dir = rest.join("/");
+const plural = (n, word) => n + " " + word + (n === 1 ? "" : "s");
 
-  view.replaceChildren(el("p", "loading", "reading " + owner + "/" + repo + "…"));
-
+/* One directory, grouped out of the cached tree. Folders are discovered
+   from the paths below them, so a listing needs no request of its own:
+   the first one pays for the whole repository and every level after it is
+   free. Returns null when the tree could not be read, having already said
+   so on the page — a repository is still worth showing without it. */
+async function appendListing(art, owner, repo, dir) {
   let tree;
   try { tree = await ghTree(owner, repo); }
   catch (err) {
-    view.replaceChildren(backLink(), el("p", "empty", err.message));
-    return;
+    art.appendChild(el("p", "origin", "Contents unavailable — " + err.message));
+    return null;
   }
-
-  document.title = repo + " · " + masterPage.title;
-  view.replaceChildren();
-  view.appendChild(backLink());
-
-  const art = el("article", "article");
-  repoCrumb(owner, repo, dir, art);
 
   const prefix = dir ? dir + "/" : "";
   const seen = new Set();
@@ -1704,10 +1794,12 @@ async function showTree(resource) {
   for (const item of tree.entries) {
     if (!item.path.startsWith(prefix)) continue;
     const tail = item.path.slice(prefix.length);
-    if (!tail || tail.includes("/")) {
+    if (!tail) continue;
+
+    if (tail.includes("/")) {
       // A directory of this level, discovered from a deeper path.
       const name = tail.split("/")[0];
-      if (name && !seen.has(name)) { seen.add(name); dirs.push(name); }
+      if (!seen.has(name)) { seen.add(name); dirs.push(name); }
       continue;
     }
     if (item.type === "tree") { if (!seen.has(tail)) { seen.add(tail); dirs.push(tail); } }
@@ -1743,14 +1835,37 @@ async function showTree(resource) {
       "GitHub truncated this listing — the repository is too large to send at once."));
   }
 
-  const origin = el("p", "origin");
+  return { dirs, files };
+}
+
+function repoOrigin(owner, repo, dir, counts) {
+  const p = el("p", "origin");
   const a = el("a", null, "github.com");
   a.href = "https://github.com/" + owner + "/" + repo +
     (dir ? "/tree/HEAD/" + dir : "");
   a.target = "_blank"; a.rel = "noopener noreferrer";
-  origin.append(files.length + " files, " + dirs.length +
-    " folders — read live from ", a);
-  art.appendChild(origin);
+  p.append(plural(counts.files.length, "file") + ", " +
+           plural(counts.dirs.length, "folder") + " — read live from ", a);
+  return p;
+}
+
+async function showTree(resource) {
+  syncMeta();
+  const view = $("view");
+  const [owner, repo, ...rest] = resource.slice(4).split("/");
+  const dir = rest.join("/");
+
+  view.replaceChildren(el("p", "loading", "reading " + owner + "/" + repo + "…"));
+
+  document.title = repo + " · " + masterPage.title;
+  view.replaceChildren();
+  view.appendChild(backLink());
+
+  const art = el("article", "article");
+  repoCrumb(owner, repo, dir, art);
+
+  const counts = await appendListing(art, owner, repo, dir);
+  if (counts) art.appendChild(repoOrigin(owner, repo, dir, counts));
 
   view.appendChild(art);
   currentArticle = resource;

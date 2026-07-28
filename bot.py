@@ -1125,6 +1125,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/about - set your site's introduction\n"
         "/footer - set your site's footer\n"
         "/link - add a GitHub page to your index\n"
+        "/repo - add a GitHub repository, files and README\n"
         "/byline - how bylines show on your site\n"
         "/telepatch - about Telepatch",
 
@@ -1183,7 +1184,8 @@ async def howto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/revise - reply to a post's Published message to rewrite it.\n"
         "/about and /footer - the introduction and footer on your site.\n"
         "/site - refresh the index after publishing.\n"
-        "/link - add a GitHub README to your index, read live.",
+        "/link - add a GitHub file or outward link to your index.\n"
+        "/repo - add a whole repository: its files, and its README.",
 
         parse_mode=ParseMode.HTML,
     )
@@ -1420,6 +1422,21 @@ async def add_external(message, token, path):
     rest = lines[(3 if categories else 2):]
     excerpt = " ".join(part for part in rest if part).strip()
 
+    kind = "read live from GitHub" if "github.com" in url else "an outward link"
+
+    await splice_entry(message, token, path, url, title, categories, excerpt, kind)
+
+
+async def splice_entry(message, token, path, url, title, categories, excerpt, kind):
+    """
+    Put one entry at the top of the index list, dated today so it sorts
+    newest.
+
+    editPage replaces a page wholesale, so everything else the master post
+    carries - masthead, footer, byline mode, author fields - has to be read
+    first and written back with it.
+    """
+
     try:
         page = telegraph("getPage", path=path, return_content="true")
 
@@ -1474,15 +1491,129 @@ async def add_external(message, token, path):
         await message.reply_text(f"Could not save it:\n{error}")
         return
 
-    kind = "read live from GitHub" if "github.com" in url else "an outward link"
-
     await message.reply_text(
         f"<b>{title}</b> added to your index - {kind}.\n\n"
         f"{SITE_URL}#{path}\n\n"
-        "Reply to this message with /link to add another."
+        "Reply to this message with /link or /repo to add another."
         + carrier_link("page", token, site=path),
         parse_mode=ParseMode.HTML,
         disable_web_page_preview=True,
+    )
+
+
+# A bare "owner/repo", or any github.com address for one. Verified against
+# the API afterwards, so this only has to recognise the shape.
+GH_REPO_RE = re.compile(
+    r"^(?:https?://)?(?:www\.)?(?:github\.com/)?"
+    r"([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)/([A-Za-z0-9._-]+?)(?:\.git)?/?$"
+)
+
+
+def github_repo(line):
+    """(owner, repo) from a bare name or a github.com address, else None."""
+
+    match = GH_REPO_RE.match((line or "").strip())
+    return (match.group(1), match.group(2)) if match else None
+
+
+def github_about(owner, repo):
+    """
+    What GitHub says the repository is for.
+
+    Returns (description, exists). Anonymous calls are limited to sixty an
+    hour, so anything other than a clear 404 is treated as "it is there,
+    but we could not read the description" - a rate limit is no reason to
+    refuse somebody their own repository.
+    """
+
+    try:
+        response = requests.get(
+            f"https://api.github.com/repos/{owner}/{repo}",
+            headers={"Accept": "application/vnd.github+json"},
+            timeout=10,
+        )
+
+    except Exception:
+        return None, True
+
+    if response.status_code == 404:
+        return None, False
+
+    if response.status_code != 200:
+        return None, True
+
+    return (response.json().get("description") or "").strip() or None, True
+
+
+async def repo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Add a GitHub repository to the index.
+
+    The website shows a repository as its file listing with the README
+    underneath, both read at the moment somebody opens the page, so the
+    entry stays current without anyone republishing it.
+    """
+
+    token, path = await find_site(update, context, "/repo")
+
+    if not path:
+        return
+
+    await update.message.reply_text(
+        "Reply with the repository:\n\n"
+        "<code>babbworks/telepatch</code>\n\n"
+        "That line on its own is enough - the name and description come "
+        "from GitHub. To write them yourself, add more lines:\n\n"
+        "<code>babbworks/telepatch\n"
+        "How this site is built\n"
+        "code, live\n\n"
+        "A sentence for the index.</code>"
+        + carrier_link("repo", token, site=path),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+        reply_markup=ForceReply(
+            selective=True,
+            input_field_placeholder="owner/repo",
+        ),
+    )
+
+
+async def add_repo(message, token, path):
+    """
+    Check the repository is really there, then splice it into the index.
+    """
+
+    lines = [line.strip() for line in (message.text or "").split("\n")]
+    found = github_repo(lines[0]) if lines else None
+
+    if not found:
+        await message.reply_text(
+            "The first line needs to be a repository, like\n"
+            "<code>babbworks/telepatch</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    owner, repo = found
+    description, exists = github_about(owner, repo)
+
+    if not exists:
+        await message.reply_text(
+            f"GitHub has no public repository called {owner}/{repo}."
+        )
+        return
+
+    title = (lines[1] if len(lines) > 1 else "") or repo
+    categories = parse_categories(lines[2]) if len(lines) > 2 else None
+
+    rest = lines[(3 if categories else 2):]
+    excerpt = " ".join(part for part in rest if part).strip() or description or ""
+
+    await splice_entry(
+        message, token, path,
+        f"https://github.com/{owner}/{repo}",
+        title, categories, excerpt,
+        "its files and README, read live from GitHub",
     )
 
 
@@ -2663,6 +2794,10 @@ async def on_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await add_external(update.message, token, extras.get("site", ""))
         return
 
+    if field == "repo":
+        await add_repo(update.message, token, extras.get("site", ""))
+        return
+
     if field in ("post", "anon"):
 
         override = ("n" in extras) and (extras.get("n", ""), extras.get("u", ""))
@@ -2730,6 +2865,7 @@ async def register_commands(app):
         ("about", "Set the introduction on your site"),
         ("footer", "Set the footer on your site"),
         ("link", "Add a GitHub or outward entry to your index"),
+        ("repo", "Add a GitHub repository, files and README"),
         ("byline", "How bylines show: linked, separate, plain"),
         ("manage", "Byline, URL, revoke - reply to your pinned identity"),
         ("views", "Views for any page: /views <url>"),
@@ -2767,6 +2903,7 @@ def main():
     app.add_handler(CommandHandler("footer", footer_site))
     app.add_handler(CommandHandler("byline", byline_site))
     app.add_handler(CommandHandler("link", link_cmd))
+    app.add_handler(CommandHandler("repo", repo_cmd))
     app.add_handler(CommandHandler("views", views))
 
     app.add_handler(CallbackQueryHandler(on_button))
