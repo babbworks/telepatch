@@ -1,0 +1,45 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements-dev.txt
+
+      - run: python -m pytest
+
+      # The static site is one file with no build step, so the only thing
+      # CI can usefully say about it is whether it parses.
+      - name: check the site's script parses
+        run: |
+          python - <<'PY'
+          import pathlib, re, subprocess, sys
+          html = pathlib.Path("index.html").read_text()
+          script = re.search(r"^<script>\n(.*?)\n</script>", html, re.S | re.M)
+          if not script:
+              sys.exit("no <script> block found in index.html")
+          pathlib.Path("/tmp/site.js").write_text(script.group(1))
+          subprocess.run(["node", "--check", "/tmp/site.js"], check=True)
+          subprocess.run(["node", "--check", "extension/background.js"], check=True)
+          subprocess.run(["node", "--check", "extension/content.js"], check=True)
+          PY
+
+      - name: no secrets in the tree
+        run: |
+          if git grep -nE '\b[0-9a-f]{60}\b|\b[0-9]{8,10}:[A-Za-z0-9_-]{35}\b' \
+             -- . ':!docs' ':!tests'; then
+            echo "possible credential committed" >&2
+            exit 1
+          fi

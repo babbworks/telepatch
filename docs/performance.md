@@ -34,14 +34,18 @@ Repeatable enough that two passes can be compared.
 grep -c 'telegraph(' bot.py
 grep -c 'await telegraph(' extension/background.js
 
-# Where a blocking call runs inside an async handler
-grep -n 'telegraph(' bot.py | wc -l      # call sites
-grep -c 'to_thread' bot.py               # ...of which are off the loop
+# No blocking call may sit in an async handler. Every telegraph() is now
+# awaited; _post is the blocking form and belongs only to pooled workers.
+grep -n '[^_a-z]telegraph(' bot.py | grep -v await   # should be empty
+grep -c '_post(' bot.py                              # workers only
 
 # Are updates handled concurrently?
 python -c "from telegram.ext import Application; \
-a=Application.builder().token('1:x').build(); \
+a=Application.builder().token('1:x').concurrent_updates(True).build(); \
 print(a.update_processor.max_concurrent_updates)"
+
+# What a rebuild actually cost, from the log
+journalctl -u telepatch-bot | grep scan.done | tail -5
 
 # One scan, timed, against a real account
 time curl -s "https://api.telegra.ph/getPageList?access_token=$TOK&limit=200" \
@@ -83,7 +87,8 @@ Measured by reading the code, 2026-07-28. **N** = pages on the account.
 | `/newsite` | 2 | 2 | plus a pin |
 | `/about` `/footer` `/byline` `/link` `/repo` `/unfile` `/retire` | 2, or **1 + N + 2** | 1–3 | the scan only when nothing carries a path |
 | `/collections` | 1 + N | **1 + M** | one message per collection |
-| `/site` | 1 + N + 2 | 3–4 | notice, result, pin |
+| `/site`, steady state | **3–4** | 3–4 | index, list, whatever is new, write |
+| `/site refresh`, first run | 1 + N + 2 | 3–4 | concurrent, 8 at a time |
 
 ---
 
@@ -91,7 +96,7 @@ Measured by reading the code, 2026-07-28. **N** = pages on the account.
 
 Status: `open` · `in progress` · `done` · `rejected`
 
-### F1 — Updates are processed one at a time · open · high
+### F1 — Updates are processed one at a time · **done**
 
 `Application.builder()` is used without `.concurrent_updates()`, and the
 default is a `SimpleUpdateProcessor` with `max_concurrent_updates = 1`.
@@ -103,7 +108,7 @@ single `/site` freezes everyone else's `/post` for its whole duration.
 **Fix:** `.concurrent_updates(True)`. Do it *with* F2, not before — raising
 concurrency while the calls still block the loop changes nothing.
 
-### F2 — Blocking HTTP inside async handlers · open · high
+### F2 — Blocking HTTP inside async handlers · **done**
 
 `telegraph()` is synchronous `requests.post` with a 10-second timeout.
 **Four of ~28 call sites** are wrapped in `asyncio.to_thread`; the rest run
@@ -113,7 +118,7 @@ inline and stop the event loop.
 remember. Same move as `kept_marker()` — when a rule has 28 places to be
 forgotten, move it somewhere it cannot be.
 
-### F3 — No connection reuse · open · medium
+### F3 — No connection reuse · **done**
 
 No `requests.Session` anywhere: every call is a fresh TCP and TLS handshake
 to `api.telegra.ph`. On a 13-call scan, that is 13 handshakes.
@@ -121,7 +126,7 @@ to `api.telegra.ph`. On a 13-call scan, that is 13 handshakes.
 **Fix:** one module-level `Session`. Two lines, helps every call, and
 compounds with F5.
 
-### F4 — `/site` re-derives what it already wrote down · open · high
+### F4 — `/site` re-derives what it already wrote down · **done**
 
 `build_index` fetches every page to compute title, date, reading time,
 categories and excerpt — then writes all five into the master post. The
@@ -134,7 +139,7 @@ article was edited outside the bot.
 
 **Effect:** 1 + N becomes 2–3 on a steady account.
 
-### F5 — The scan is sequential · open · high
+### F5 — The scan is sequential · **done**
 
 `scan_pages` is a `for` loop of `getPage` calls. 13 pages is 13 round trips
 in series.
@@ -201,18 +206,18 @@ Harmless in principle, wasteful in practice.
 
 **Fix:** 1 second, plus a write on blur and on panel close.
 
-### F14 — No retries anywhere · open · medium
+### F14 — No retries anywhere · **done**
 
 A transient 5xx from Telegraph fails the command outright. Not a
 performance bug, but it sets the latency budget: retries only make sense
 once F2 stops them from blocking everyone.
 
-### F15 — `scan_pages` holds every page's content in memory · open · low
+### F15 — `scan_pages` holds every page's content in memory · **mostly done**
 
 Bounded by `INDEX_LIMIT` at 200 pages, but 200 long articles is tens of
 megabytes held at once. F4 mostly removes the need.
 
-### F16 — The systemd unit sets no resource limits · open · low
+### F16 — The systemd unit sets no resource limits · **done**
 
 `telepatch-bot.service` is well hardened for *access* but has no
 `MemoryMax` or `CPUQuota`. F15 is the reason that matters.
@@ -242,4 +247,11 @@ Kept so they are not rediscovered and re-argued.
 ## Changelog
 
 - **2026-07-28** — first pass. F1–F16 recorded, three optimisations
-  rejected with reasons. Nothing fixed yet.
+  rejected with reasons.
+- **2026-07-28** — F1, F2, F3, F4, F5, F14, F16 fixed; F15 mostly follows
+  from F4. Remaining and open: **F6** (`/post` spends a call on a link most
+  posts never use), **F7** (`/collections` sends a burst), **F8** (progress
+  notices cost two calls), **F9** (`ghTree` on every repo view — a
+  regression), **F10** (website cache dies on reload), **F11**
+  (highlighting at the 400 kB ceiling, unmeasured), **F12** (the
+  extension's `discover()`), **F13** (draft autosave every 400 ms).

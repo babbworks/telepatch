@@ -6,7 +6,8 @@
 #   journalctl -u telepatch-bot -f
 #
 # Assumes the repo at /opt/telepatch, a venv at /opt/telepatch/.venv, and a
-# .env alongside them. Adjust paths and User to taste.
+# .env alongside them, owned by root and mode 0600. Adjust paths and User
+# to taste. See docs/runbook.md.
 
 [Unit]
 Description=Telepatch - Telegram to Telegraph publishing bridge
@@ -15,7 +16,8 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 User=telepatch
 Group=telepatch
 WorkingDirectory=/opt/telepatch
@@ -29,6 +31,16 @@ ExecStart=/opt/telepatch/.venv/bin/python /opt/telepatch/bot.py
 Restart=always
 RestartSec=5
 
+# A bot that has stopped polling looks perfectly healthy to Restart=always,
+# because the process is still there. The watchdog is what tells the
+# difference: bot.py pings systemd on a timer, and silence is a restart.
+WatchdogSec=180
+
+# Give it a moment to finish an in-flight editPage rather than tearing it
+# off mid-write. Telegraph has no transactions and no undo.
+TimeoutStopSec=30
+KillSignal=SIGINT
+
 # The bot writes nothing and needs nothing, so give it nothing.
 NoNewPrivileges=true
 PrivateTmp=true
@@ -36,10 +48,26 @@ PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=true
 ProtectKernelTunables=true
+ProtectKernelModules=true
 ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077
+
+# One scan holds every page's content in memory at once, bounded by
+# INDEX_LIMIT. These are ceilings, not budgets: hitting one is a bug.
+MemoryMax=512M
+TasksMax=64
+CPUQuota=200%
 
 [Install]
 WantedBy=multi-user.target

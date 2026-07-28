@@ -1,0 +1,15 @@
+version: 2
+
+updates:
+  # Versions are pinned exactly, which is right for a service and wrong
+  # for security. This is what keeps the pins moving.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

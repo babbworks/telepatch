@@ -244,11 +244,24 @@ There is no server to expose. `run_polling()` makes outbound requests to
 `api.telegram.org`, so it works behind NAT with no port forwarding. Only one
 process may poll a given token at a time.
 
+Tests:
+
+```bash
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest
+```
+
 ### As a service
 
-`telepatch-bot.service` is a systemd unit with the paths and hardening
-already set. Because the bot is stateless, one instance serves any number of
-publishers with no per-user storage and nothing to back up.
+`telepatch-bot.service` is a systemd unit with the paths, hardening,
+resource ceilings and watchdog already set; `./deploy.sh user@host` stops,
+updates and restarts it. Because the bot is stateless, one instance serves
+any number of publishers with no per-user storage and nothing to back up.
+
+Long polling dials out and listens on nothing, so there is no port to
+expose, no certificate to renew and no domain required. **Only one process
+may poll a token at a time** — a deploy stops before it starts, and two
+bots on one token looks like random message loss.
 
 ### The site
 
@@ -260,10 +273,14 @@ hands out the right links.
 
 ## Notes
 
-- [More than one collection](docs/multiple-collections.md) — one token,
-  several collections, and the way back out of it.
+- [Running this properly](docs/operations.md) — the staged plan, and what
+  is done.
+- [Runbook](docs/runbook.md) — restart, logs, token rotation, and what to
+  do when something was written wrong.
 - [Performance](docs/performance.md) — where the requests go, what they
   cost, and a register of what to tighten next.
+- [More than one collection](docs/multiple-collections.md) — one token,
+  several collections, and the way back out of it.
 
 ---
 

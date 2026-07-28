@@ -3724,23 +3724,94 @@ async def on_error(update, context):
             pass
 
 
-async def heartbeat(context):
+def notify(state):
+    """
+    sd_notify, by hand. It is one datagram to a unix socket, which is less
+    code than taking a dependency for it - and a no-op anywhere systemd is
+    not watching, so the laptop behaves exactly as before.
+    """
+
+    address = os.environ.get("NOTIFY_SOCKET")
+
+    if not address:
+        return
+
+    try:
+        import socket
+
+        if address.startswith("@"):          # abstract namespace
+            address = "\0" + address[1:]
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.connect(address)
+            sock.sendall(state.encode())
+
+    except Exception as error:
+        log.debug("notify.failed state=%s error=%s", state, error)
+
+
+TICKERS = []
+
+
+def every(seconds, work, app):
+    """
+    A repeating task. PTB's own job queue needs APScheduler, which is a
+    dependency and a scheduler for something that is two lines of asyncio.
+    """
+
+    async def loop():
+        while True:
+            await asyncio.sleep(seconds)
+
+            try:
+                await work(app)
+
+            except Exception:
+                log.exception("ticker.failed")
+
+    # Held, because asyncio only keeps a weak reference to a bare task.
+    TICKERS.append(asyncio.create_task(loop()))
+
+
+async def watchdog(app):
+    """
+    A bot that has stopped polling looks perfectly healthy to
+    Restart=always, because the process is still there. This pings only
+    while the updater reports itself running, so a wedged poller stops the
+    pings and systemd restarts it.
+    """
+
+    if app.updater is not None and app.updater.running:
+        notify("WATCHDOG=1")
+
+
+async def heartbeat(app):
     """
     A dead man's switch. Long polling opens no port, so nothing outside can
     check whether this is alive - it has to say so itself, and silence is
     what raises the alarm.
     """
 
-    try:
-        await asyncio.to_thread(SESSION.get, HEARTBEAT_URL, timeout=10)
-
-    except Exception as error:
-        log.warning("heartbeat.failed error=%s", error)
+    await asyncio.to_thread(SESSION.get, HEARTBEAT_URL, timeout=10)
 
 
 async def on_start(app):
     await register_commands(app)
-    log.info("telepatch.started polling=1 heartbeat=%s operator=%s",
+
+    notify("READY=1")
+
+    # systemd states the interval in microseconds and expects a ping
+    # comfortably inside it; half is the documented convention.
+    window = int(os.environ.get("WATCHDOG_USEC", 0)) / 1_000_000
+
+    if window:
+        every(window / 2, watchdog, app)
+
+    if HEARTBEAT_URL:
+        every(HEARTBEAT_SECONDS, heartbeat, app)
+
+    log.info("telepatch.started watchdog=%s heartbeat=%s operator=%s",
+             f"{window:.0f}s" if window else "off",
              bool(HEARTBEAT_URL), bool(OPERATOR_CHAT))
 
 
@@ -3769,9 +3840,6 @@ def main():
     )
 
     app.add_error_handler(on_error)
-
-    if HEARTBEAT_URL:
-        app.job_queue.run_repeating(heartbeat, interval=HEARTBEAT_SECONDS, first=5)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("howto", howto))
