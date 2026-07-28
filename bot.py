@@ -1146,6 +1146,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/repo - add a GitHub repository, files and README\n"
         "/collections - list your collections\n"
         "/newsite - start another collection\n"
+        "/unfile - take an entry out of a collection\n"
         "/retire - take a collection out of service\n"
         "/byline - how bylines show on your site\n"
         "/telepatch - about Telepatch",
@@ -2027,6 +2028,116 @@ async def newsite(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 
+async def unfile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Take one entry out of a collection.
+
+    Filing is exclusive, so this is the only way back: without it a stray
+    /link would hide a page from the primary index for good, short of
+    editing Telegraph by hand. It also serves as the way to drop a GitHub
+    or outward entry, which nothing else could do.
+
+    Replying to a Published message needs no argument at all - that
+    message carries both the collection and the page.
+    """
+
+    _, _, extras = read_carrier(update.message)
+
+    wanted = command_words(context)
+    target = telegraph_path(wanted) if wanted else extras.get("path")
+
+    token, path = await find_site(update, context, "/unfile")
+
+    if not path:
+        return
+
+    if not target and not wanted:
+        await update.message.reply_text(
+            "Reply to a <b>Published</b> message with /unfile, or give the "
+            "address of the entry:\n\n"
+            "<code>/unfile https://telegra.ph/Some-Page-07-28</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    try:
+        page = telegraph("getPage", path=path, return_content="true")
+
+    except Exception as error:
+        await update.message.reply_text(f"Could not find that collection:\n{error}")
+        return
+
+    head, middle, foot = split_master(page.get("content"))
+
+    listing = middle[0] if middle and middle[0].get("tag") == "ul" else None
+
+    if listing is None:
+        await update.message.reply_text(
+            f"<b>{page['title']}</b> has nothing in it yet.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    kept = []
+    removed = None
+
+    for item in listing.get("children") or []:
+
+        href = entry_href(item)
+
+        # Matched either as a telegra.ph page or as the exact address of an
+        # outward entry, so one command covers both kinds.
+        hit = href and (
+            (target and telegraph_path(href) == target)
+            or (wanted and href.rstrip("/") == wanted.rstrip("/"))
+        )
+
+        if hit and removed is None:
+            removed = node_text(item).split(INDEX_SEP)[0].strip()
+            continue
+
+        kept.append(item)
+
+    if removed is None:
+        await update.message.reply_text(
+            f"Nothing in <b>{page['title']}</b> points at that.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    listing["children"] = kept
+
+    try:
+        telegraph(
+            "editPage",
+            access_token=token,
+            path=path,
+            title=page["title"],
+            content=json.dumps(
+                head + middle + foot + [kept_marker(page.get("content"))]
+            ),
+            author_name=page.get("author_name") or "",
+            author_url=page.get("author_url") or "",
+        )
+
+    except Exception as error:
+        await update.message.reply_text(f"Could not save it:\n{error}")
+        return
+
+    back = ""
+
+    if is_extra(page.get("content")) and target:
+        back = ("\n\nIt is no longer filed, so /site will list it in your "
+                "primary index again.")
+
+    await update.message.reply_text(
+        f"<b>{removed}</b> removed from {page['title']}.{back}"
+        + carrier_link("page", token, site=path),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
 async def retire(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Take a collection out of service.
@@ -2775,17 +2886,77 @@ def read_footer(content):
     return split_master(content)[2]
 
 
+def entry_href(item):
+    """
+    The address an index entry points at, or None if it is not an entry.
+    """
+
+    if not isinstance(item, dict) or item.get("tag") != "li":
+        return None
+
+    for child in item.get("children") or []:
+
+        if isinstance(child, dict) and child.get("tag") == "a":
+            return (child.get("attrs") or {}).get("href")
+
+    return None
+
+
+def claimed_paths(scanned):
+    """
+    The pages filed into a curated collection.
+
+    The primary is the inbox and a collection is a folder: filing a page
+    moves it. Membership needs no marker of its own because it is already
+    written down - in the list of the collection that claims it - and
+    scan_pages has fetched every one of those lists already.
+
+    Retired collections claim nothing, or retiring one would strand its
+    pages outside every index.
+    """
+
+    filed = set()
+
+    for _, content in scanned:
+
+        text = " ".join(node_text(n) for n in content or [])
+
+        if MASTER_MARK not in text or RETIRED_MARK in text:
+            continue
+
+        if EXTRA_FIELD not in text:
+            continue
+
+        _, middle, _ = split_master(content)
+        listing = middle[0] if middle and middle[0].get("tag") == "ul" else None
+
+        for item in (listing or {}).get("children") or []:
+
+            href = entry_href(item)
+            path = telegraph_path(href) if href else None
+
+            # Only pages on telegra.ph can be filed. A GitHub or outward
+            # entry was never in the account listing to begin with.
+            if path and "github.com" not in (href or ""):
+                filed.add(path)
+
+    return filed
+
+
 def build_index(scanned, master_path=None, known_dates=None,
                 masthead=None, footer=None, byline=BYLINE_DEFAULT,
-                external=None):
+                external=None, filed=None):
     """
     Lay the account's articles out as the content of one master post.
 
     Every generated index is skipped, not just the one being rewritten -
     otherwise a stray index from an earlier run appears as an article.
+    Pages filed into a curated collection are skipped too: they have been
+    moved, not copied.
     """
 
     known_dates = known_dates or {}
+    filed = filed or set()
     today = date.today().isoformat()
 
     entries = []
@@ -2793,6 +2964,9 @@ def build_index(scanned, master_path=None, known_dates=None,
     for page, content in scanned:
 
         if page["path"] == master_path or is_index(content):
+            continue
+
+        if page["path"] in filed:
             continue
 
         categories = page_categories(content)
@@ -2919,6 +3093,7 @@ async def rebuild_site(message, token, master_path=None, title=None):
     # A curated collection is a list somebody made on purpose. Enumerating
     # the account into it would replace their choices with everything.
     curated = is_extra(old)
+    filed_count = 0
 
     if curated:
         head, middle, foot = split_master(old)
@@ -2932,9 +3107,18 @@ async def rebuild_site(message, token, master_path=None, title=None):
         ]
 
     else:
+        filed = claimed_paths(scanned)
+
         entries, content = build_index(
             scanned, master_path, known_dates, masthead, footer,
-            read_byline(old), read_external(old)
+            read_byline(old), read_external(old), filed
+        )
+
+        # Said out loud, always. A page quietly missing from a rebuild that
+        # was run for some other reason is how trust in this goes.
+        filed_count = sum(
+            1 for page, page_content in scanned
+            if page["path"] in filed and not is_index(page_content)
         )
 
     byline = info.get("author_name") or info.get("short_name") or ""
@@ -2983,7 +3167,9 @@ async def rebuild_site(message, token, master_path=None, title=None):
         f"{SITE_URL}#{page['path']}\n\n"
         + (f"{len(entries)} entries · curated by hand\n" if curated else
            f"{len(entries) - nav} posts · {nav} nav pages · "
-           f"{len(tags)} categories\n")
+           f"{len(tags)} categories\n"
+           + (f"{filed_count} filed in collections, left out\n"
+              if filed_count else ""))
         + (f"{', '.join(tags)}\n" if tags else "")
         + "\nAnyone can open that link - it carries no token.\n"
         "Reply to this message with /site after publishing to refresh it."
@@ -3237,6 +3423,7 @@ async def register_commands(app):
         ("repo", "Add a GitHub repository, files and README"),
         ("collections", "List your collections"),
         ("newsite", "Start another collection on this identity"),
+        ("unfile", "Take an entry out of a collection"),
         ("byline", "How bylines show: linked, separate, plain"),
         ("manage", "Byline, URL, revoke - reply to your pinned identity"),
         ("views", "Views for any page: /views <url>"),
@@ -3273,6 +3460,7 @@ def main():
     app.add_handler(CommandHandler("collections", collections_cmd))
     app.add_handler(CommandHandler("newsite", newsite))
     app.add_handler(CommandHandler("retire", retire))
+    app.add_handler(CommandHandler(["unfile", "unlink"], unfile))
     app.add_handler(CommandHandler("about", about_site))
     app.add_handler(CommandHandler("footer", footer_site))
     app.add_handler(CommandHandler("byline", byline_site))

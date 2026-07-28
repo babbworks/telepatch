@@ -59,10 +59,40 @@ The path travels on the ForceReply carrier, which is a hidden link with no
 length limit — the same reason `/revise` can carry a page path while a
 button cannot.
 
-**A post written for a collection also appears in the primary.** The
-primary is the account's whole output; a collection is a selection from
-it. That is the intended reading, but it is a decision rather than a
-technical necessity — see the open questions.
+### Filing
+
+**The primary is the inbox. A collection is a folder. Filing moves a page.**
+
+A page listed in any live curated collection is left out of the primary
+when `/site` rebuilds it. One rule, no exceptions — not for hand-added
+entries, not for nav pages.
+
+It needs no marker and no extra request, because membership is already
+written down in the collection's own list, and `scan_pages` has fetched
+every one of those lists on its way past.
+
+Three things follow, and all three are deliberate:
+
+- **`/site` says what it left out** — *"3 filed in collections, left out"*.
+  A page quietly missing from a rebuild run for some other reason is how
+  trust in this goes.
+- **A retired collection claims nothing.** Otherwise retiring one would
+  strand its pages outside every index at once.
+- **Only telegra.ph pages can be filed.** A GitHub or outward entry was
+  never in the account listing to begin with.
+
+`/unfile` is the way back, and was built in the same change rather than
+after it. Without it a stray `/link` would hide a page from the primary
+for good, short of editing Telegraph by hand. Reply to a **Published**
+message and it needs no argument at all — that message carries both the
+collection and the page. It also removes GitHub and outward entries,
+which nothing else could do, and is aliased `/unlink` for that reason.
+
+**What this costs: cross-references.** A collection can no longer point at
+an article as a mention while leaving it in the primary. Linking means
+moving. Keeping both would need a per-entry flag in the collection's list
+— possible, since that line is already parsed — but one rule learned once
+is worth more than the refinement.
 
 ### The trap that had to be closed first
 
@@ -255,10 +285,24 @@ extras listed as articles: False       ← never, in either state
 1. **Retire every curated collection.** `/collections`, then reply to each
    curated one with `/retire`. `/retire` refuses to touch a primary, so
    this cannot go too far.
-2. **Revert the code.** The change is one commit; `git revert` it.
+2. **Revert the code.** `git revert` the commits.
 
 Nothing else is needed. No page has to be edited by hand, and no data is
 left in a state the old code misreads.
+
+Filing adds no step. It is a filter, not a format: nothing is written to
+Telegraph to record that a page is filed, so removing the filter puts
+every filed page back in the primary on the next rebuild. Retiring the
+collections in step 1 has the same effect even before the code goes —
+a retired collection claims nothing.
+
+Verified with the bot's own functions:
+
+```
+claimed by a live collection : Filed-One, Filed-Two
+primary lists                : Stranded, Loose page
+without the filter           : Filed one, Filed two, Stranded, Loose page
+```
 
 ### What cannot be undone
 
@@ -286,21 +330,8 @@ already exists, gives the account two. Only the newest would be found.
 
 ## Open questions
 
-1. Is a collection a *view* of an account's pages, or a *thing pages
-   belong to*? Everything above follows from the answer. Currently a
-   view: a post written for a collection appears there **and** in the
-   primary, because the primary lists everything published.
-
-   If exclusivity is wanted later, the cheapest route needs no format
-   change at all. `scan_pages` already fetches every page's content, so
-   `/site` can see what each curated collection lists and skip those
-   pages when rebuilding the primary — membership is already recorded, in
-   the collection's own list. It would be one filter in `build_index`,
-   and removing the filter restores today's behaviour exactly.
-
-   The reason it is not the default: a page silently vanishing from the
-   main index because somebody linked it somewhere is a surprise, and an
-   alarming one.
+1. ~~Is a collection a view of an account's pages, or a thing pages belong
+   to?~~ **Answered: a thing pages belong to.** See *Filing* above.
 2. If articles get tagged with a collection, where does the tag live so
    that a page written by hand in the Telegraph editor still works?
 3. Should `/new` stay the recommended way to separate concerns? Separate
