@@ -144,9 +144,23 @@ How this site is built — 2026-07-27 · code, live
 https://github.com/babbworks/telepatch
 ```
 
-`raw.githubusercontent.com` allows cross-origin reads and is not rate
-limited, so this needs no server. GitHub's API is touched only to learn a
-README's filename when it is not `README.md`.
+Every GitHub article carries a **Browse all files** link. One request to
+GitHub's tree API returns the whole repository's structure — even CPython's
+6,435 entries come back untruncated — and it is cached, so every folder and
+file after that costs nothing extra. File contents come from
+`raw.githubusercontent.com`, which allows cross-origin reads and is not rate
+limited.
+
+Markdown files render as prose. Anything else is shown as code, highlighted
+by a small lexer written for this project: comments, strings, numbers and
+keywords across about fifteen languages. Loading a highlighter from a CDN
+would break the promise that this page makes no third-party requests, and
+vendoring one would put more unaudited code in the repository than there is
+Telepatch. Images are displayed; other binaries and anything over 400 kB
+are linked to rather than pulled in.
+
+The tree API is the only rate-limited call in any of this — 60 an hour, per
+reader.
 
 `/site` reads these back before rewriting the list, so a hand-added entry
 survives a rebuild and keeps its place by date.

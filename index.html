@@ -360,6 +360,43 @@ main{padding-block-end:6rem;min-height:0;flex:1 0 auto}
 }
 .body tbody tr:last-child td{border-bottom:0}
 .body td code{white-space:nowrap}
+
+/* Four token colours, drawn from the exchange palette rather than added
+   to it. Quiet enough to read a whole file through. */
+:root{--tok-num:#7A5B2E;--tok-key:#5B3E6B}
+@media (prefers-color-scheme:dark){:root{--tok-num:#C9A96A;--tok-key:#B79BC7}}
+.tk-c{color:var(--graphite);font-style:italic}
+.tk-s{color:var(--patch)}
+.tk-n{color:var(--tok-num)}
+.tk-k{color:var(--tok-key)}
+
+/* ---- repository listing ---- */
+.crumb{
+  font-family:var(--mono);font-size:.7rem;
+  text-transform:uppercase;letter-spacing:.07em;
+  color:var(--graphite);margin:0 0 1.4rem;overflow-wrap:anywhere;
+}
+.crumb a{color:var(--patch);text-decoration:none}
+.crumb a:hover{color:var(--lamp)}
+.tree{list-style:none;margin:0;padding:0}
+.tree li{
+  display:flex;gap:1rem;align-items:baseline;
+  padding:.4rem 0;border-bottom:1px solid var(--hair);
+}
+.tree a{
+  flex:1;min-width:0;font-family:var(--mono);font-size:.9rem;
+  color:var(--ink);text-decoration:none;overflow-wrap:anywhere;
+}
+.tree a:hover{color:var(--patch)}
+.tree a.dir{font-weight:700}
+.tree .size{
+  font-family:var(--mono);font-size:.68rem;color:var(--graphite);
+  white-space:nowrap;
+}
+.body pre.code{
+  font-size:.8rem;line-height:1.6;
+  max-height:none;white-space:pre;
+}
 .origin{
   margin:3.5rem 0 0;padding-top:1.2rem;border-top:1px solid var(--hair);
   font-family:var(--sans);font-size:.8rem;color:var(--graphite);
@@ -565,6 +602,40 @@ function ghResource(url) {
 }
 
 const isGh = path => typeof path === "string" && path.startsWith("gh:");
+const isTree = path => typeof path === "string" && path.startsWith("ght:");
+
+/* Files that are not worth fetching as text. */
+const BINARY = new Set(["png","jpg","jpeg","gif","webp","ico","bmp","pdf","zip",
+  "gz","tar","woff","woff2","ttf","otf","eot","mp3","mp4","mov","wav","exe",
+  "dll","so","dylib","o","a","class","jar","wasm","psd","sketch"]);
+const IMAGE = new Set(["png","jpg","jpeg","gif","webp","ico","bmp","svg"]);
+const MARKDOWN = new Set(["md","markdown","mdown","mkd"]);
+const extOf = name => name.split(".").pop().toLowerCase();
+
+// Anything past this is linked to rather than pulled into the page.
+const MAX_FILE = 400 * 1024;
+
+/* One request returns a whole repository's structure, even a large one -
+   cpython's 6,435 entries come back untruncated. It is the only rate
+   limited call in the whole feature (60/hour), so it is cached and every
+   file afterwards comes from raw, which has no limit at all. */
+async function ghTree(owner, repo) {
+  const key = "tree:" + owner + "/" + repo;
+  if (cache.has(key)) return cache.get(key);
+
+  const res = await fetch("https://api.github.com/repos/" + owner + "/" +
+    repo + "/git/trees/HEAD?recursive=1");
+
+  if (res.status === 403) {
+    throw new Error("GitHub is rate limiting this browser — try again in an hour");
+  }
+  if (!res.ok) throw new Error("could not read that repository");
+
+  const data = await res.json();
+  const tree = { entries: data.tree || [], truncated: !!data.truncated };
+  cache.set(key, tree);
+  return tree;
+}
 
 async function ghFetch(resource) {
   const [owner, repo, ...rest] = resource.slice(3).split("/");
@@ -573,9 +644,24 @@ async function ghFetch(resource) {
     "https://raw.githubusercontent.com/" + owner + "/" + repo + "/HEAD/" + name;
 
   if (file) {
+    const ext = extOf(file);
+
+    if (BINARY.has(ext)) {
+      return { binary: true, image: IMAGE.has(ext), name: file, owner, repo,
+               file: true, src: raw(file) };
+    }
+
     const res = await fetch(raw(file));
     if (!res.ok) throw new Error("that file is not in the repository");
-    return { text: await res.text(), name: file, owner, repo };
+
+    const text = await res.text();
+
+    if (text.length > MAX_FILE) {
+      return { tooBig: true, name: file, owner, repo, file: true, src: raw(file) };
+    }
+
+    return { text, name: file, owner, repo, file: true,
+             code: !MARKDOWN.has(ext) };
   }
 
   let res = await fetch(raw("README.md"));
@@ -716,6 +802,125 @@ function parseMaster(content) {
     byline,
     entries: collect(nodes[cut].children, [])
   };
+}
+
+/* ---------- syntax highlighting ----------
+
+   Ours, not a library. Loading one from a CDN would break the promise
+   that this page makes no third-party requests, and vendoring highlight.js
+   would put 120kB of unaudited code in a repository whose pitch is "read
+   the source". Comments, strings, numbers and keywords cover most of what
+   the eye is actually using; anything cleverer is not worth the weight.
+
+   Built as elements, never innerHTML, so a file's contents can never be
+   markup here. */
+
+const K_C = "break case catch class const continue default delete do else export extends finally for function if import in instanceof let new return static super switch this throw try typeof var void while yield async await of";
+const LANGS = {
+  js:   { line: ["//"], block: [["/*", "*/"]], str: ["\"", "'", "`"], kw: K_C },
+  ts:   { line: ["//"], block: [["/*", "*/"]], str: ["\"", "'", "`"], kw: K_C + " interface type enum implements readonly" },
+  json: { line: [], block: [], str: ["\""], kw: "true false null" },
+  py:   { line: ["#"], block: [['\"\"\"', '\"\"\"'], [", "]], str: ["\"", "'"], kw: "and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield True False None self" },
+  sh:   { line: ["#"], block: [], str: ["\"", "'"], kw: "if then else elif fi for while do done case esac function return export local read echo set unset trap exit" },
+  css:  { line: [], block: [["/*", "*/"]], str: ["\"", "'"], kw: "important media supports keyframes import charset font-face root" },
+  html: { line: [], block: [["<!--", "-->"]], str: ["\"", "'"], kw: "" },
+  yaml: { line: ["#"], block: [], str: ["\"", "'"], kw: "true false null yes no on off" },
+  toml: { line: ["#"], block: [], str: ["\"", "'"], kw: "true false" },
+  sql:  { line: ["--"], block: [["/*", "*/"]], str: ["'", "\""], kw: "select from where insert update delete create table drop alter join left right inner outer on group by order having limit offset union values into set null not and or as distinct" },
+  c:    { line: ["//"], block: [["/*", "*/"]], str: ["\"", "'"], kw: "auto break case char const continue default do double else enum extern float for goto if inline int long register return short signed sizeof static struct switch typedef union unsigned void volatile while include define ifdef ifndef endif" },
+  go:   { line: ["//"], block: [["/*", "*/"]], str: ["\"", "`", "'"], kw: "break case chan const continue default defer else fallthrough for func go goto if import interface map package range return select struct switch type var nil true false" },
+  rs:   { line: ["//"], block: [["/*", "*/"]], str: ["\"", "'"], kw: "as break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self static struct super trait true type unsafe use where while async await" },
+  rb:   { line: ["#"], block: [], str: ["\"", "'"], kw: "def end class module if elsif else unless while until for do return yield begin rescue ensure raise require nil true false self attr_accessor" },
+  java: { line: ["//"], block: [["/*", "*/"]], str: ["\"", "'"], kw: "abstract boolean break byte case catch char class const continue default do double else enum extends final finally float for if implements import int interface long new package private protected public return short static super switch this throw throws try void while true false null" }
+};
+
+const EXT = {
+  js: "js", mjs: "js", cjs: "js", jsx: "js", ts: "ts", tsx: "ts",
+  json: "json", py: "py", sh: "sh", bash: "sh", zsh: "sh",
+  css: "css", scss: "css", html: "html", htm: "html", xml: "html", svg: "html",
+  yml: "yaml", yaml: "yaml", toml: "toml", ini: "toml", cfg: "toml",
+  sql: "sql", c: "c", h: "c", cpp: "c", hpp: "c", cc: "c",
+  go: "go", rs: "rs", rb: "rb", java: "java", kt: "java", swift: "java",
+  php: "c", pl: "sh", lua: "c", r: "sh", m: "c"
+};
+
+const langOf = name => {
+  const base = name.split("/").pop().toLowerCase();
+  if (base === "dockerfile" || base === "makefile") return "sh";
+  return EXT[base.split(".").pop()] || null;
+};
+
+const WORD = /[A-Za-z_$]/;
+
+function highlight(src, lang, parent) {
+  const rules = LANGS[lang];
+
+  if (!rules) { parent.append(src); return; }
+
+  const keys = new Set(rules.kw.split(" ").filter(Boolean));
+  let plain = "";
+
+  const flush = () => { if (plain) { parent.append(plain); plain = ""; } };
+  const emit = (cls, text) => { flush(); parent.appendChild(el("span", cls, text)); };
+
+  let i = 0;
+  while (i < src.length) {
+    const rest = src.slice(i);
+
+    const line = rules.line.find(m => rest.startsWith(m));
+    if (line) {
+      const end = src.indexOf("\n", i);
+      const stop = end === -1 ? src.length : end;
+      emit("tk-c", src.slice(i, stop));
+      i = stop;
+      continue;
+    }
+
+    const block = rules.block.find(pair => rest.startsWith(pair[0]));
+    if (block) {
+      const end = src.indexOf(block[1], i + block[0].length);
+      const stop = end === -1 ? src.length : end + block[1].length;
+      emit("tk-c", src.slice(i, stop));
+      i = stop;
+      continue;
+    }
+
+    const quote = rules.str.find(q => rest.startsWith(q));
+    if (quote) {
+      let j = i + quote.length;
+      while (j < src.length) {
+        if (src[j] === "\\") { j += 2; continue; }
+        if (src.startsWith(quote, j)) { j += quote.length; break; }
+        if (src[j] === "\n" && quote !== "`") { break; }
+        j++;
+      }
+      emit("tk-s", src.slice(i, j));
+      i = j;
+      continue;
+    }
+
+    if (/[0-9]/.test(src[i]) && !WORD.test(src[i - 1] || " ")) {
+      let j = i;
+      while (j < src.length && /[0-9a-fA-FxX._]/.test(src[j])) j++;
+      emit("tk-n", src.slice(i, j));
+      i = j;
+      continue;
+    }
+
+    if (WORD.test(src[i])) {
+      let j = i;
+      while (j < src.length && /[A-Za-z0-9_$]/.test(src[j])) j++;
+      const word = src.slice(i, j);
+      if (keys.has(word)) emit("tk-k", word);
+      else plain += word;
+      i = j;
+      continue;
+    }
+
+    plain += src[i];
+    i++;
+  }
+  flush();
 }
 
 /* ---------- Markdown ----------
@@ -1152,6 +1357,7 @@ function paint() {
 }
 
 async function showArticle(path) {
+  if (isTree(path)) return showTree(path);
   if (isGh(path)) return showGithub(path);
   syncMeta();
   const view = $("view");
@@ -1391,11 +1597,42 @@ async function showGithub(resource) {
     art.appendChild(row);
   }
 
+  if (doc.file) {
+    repoCrumb(doc.owner, doc.repo,
+      doc.name.split("/").slice(0, -1).join("/"), art);
+  } else {
+    const browse = el("p", "crumb");
+    const a = el("a", null, "Browse all files →");
+    a.href = link(master, "ght:" + doc.owner + "/" + doc.repo);
+    browse.appendChild(a);
+    art.appendChild(browse);
+  }
+
   const body = el("div", "body");
   const base = "https://raw.githubusercontent.com/" + doc.owner + "/" + doc.repo + "/HEAD/";
-  renderMarkdown(doc.text, body, base);
 
-  const toc = buildToc(body, resource);
+  if (doc.binary && doc.image) {
+    const img = document.createElement("img");
+    img.src = doc.src; img.alt = doc.name; img.loading = "lazy";
+    body.appendChild(img);
+  } else if (doc.binary || doc.tooBig) {
+    const p = el("p");
+    const a = el("a", null, "open it on github.com");
+    a.href = doc.src; a.target = "_blank"; a.rel = "noopener noreferrer";
+    p.append(doc.tooBig
+      ? "That file is too large to show here — "
+      : "That is not a text file — ", a);
+    body.appendChild(p);
+  } else if (doc.code) {
+    const pre = el("pre", "code");
+    const lang = langOf(doc.name);
+    highlight(doc.text, lang, pre);
+    body.appendChild(pre);
+  } else {
+    renderMarkdown(doc.text, body, base);
+  }
+
+  const toc = doc.code ? null : buildToc(body, resource);
   if (toc) art.appendChild(toc);
   art.appendChild(body);
 
@@ -1415,6 +1652,118 @@ async function showGithub(resource) {
 
   syncBar();
   checkAlign();
+}
+
+/* ---------- repository browsing ---------- */
+
+function repoCrumb(owner, repo, dir, art) {
+  const crumb = el("p", "crumb");
+  const at = [];
+
+  const step = (text, path) => {
+    const a = el("a", null, text);
+    a.href = link(master, "ght:" + owner + "/" + repo + (path ? "/" + path : ""));
+    return a;
+  };
+
+  crumb.appendChild(step(repo, ""));
+  for (const part of dir ? dir.split("/") : []) {
+    at.push(part);
+    crumb.append(" / ");
+    crumb.appendChild(step(part, at.join("/")));
+  }
+  art.appendChild(crumb);
+}
+
+async function showTree(resource) {
+  syncMeta();
+  const view = $("view");
+  const [owner, repo, ...rest] = resource.slice(4).split("/");
+  const dir = rest.join("/");
+
+  view.replaceChildren(el("p", "loading", "reading " + owner + "/" + repo + "…"));
+
+  let tree;
+  try { tree = await ghTree(owner, repo); }
+  catch (err) {
+    view.replaceChildren(backLink(), el("p", "empty", err.message));
+    return;
+  }
+
+  document.title = repo + " · " + masterPage.title;
+  view.replaceChildren();
+  view.appendChild(backLink());
+
+  const art = el("article", "article");
+  repoCrumb(owner, repo, dir, art);
+
+  const prefix = dir ? dir + "/" : "";
+  const seen = new Set();
+  const dirs = [], files = [];
+
+  for (const item of tree.entries) {
+    if (!item.path.startsWith(prefix)) continue;
+    const tail = item.path.slice(prefix.length);
+    if (!tail || tail.includes("/")) {
+      // A directory of this level, discovered from a deeper path.
+      const name = tail.split("/")[0];
+      if (name && !seen.has(name)) { seen.add(name); dirs.push(name); }
+      continue;
+    }
+    if (item.type === "tree") { if (!seen.has(tail)) { seen.add(tail); dirs.push(tail); } }
+    else files.push(item);
+  }
+
+  dirs.sort((a, b) => a.localeCompare(b));
+  files.sort((a, b) => a.path.localeCompare(b.path));
+
+  const list = el("ul", "tree");
+
+  for (const name of dirs) {
+    const li = el("li");
+    const a = el("a", "dir", name + "/");
+    a.href = link(master, "ght:" + owner + "/" + repo + "/" + prefix + name);
+    li.appendChild(a);
+    list.appendChild(li);
+  }
+
+  for (const item of files) {
+    const li = el("li");
+    const a = el("a", null, item.path.slice(prefix.length));
+    a.href = link(master, "gh:" + owner + "/" + repo + "/" + item.path);
+    li.append(a, el("span", "size", fmtSize(item.size)));
+    list.appendChild(li);
+  }
+
+  if (!list.children.length) list.appendChild(el("li", "empty", "Nothing here."));
+  art.appendChild(list);
+
+  if (tree.truncated) {
+    art.appendChild(el("p", "origin",
+      "GitHub truncated this listing — the repository is too large to send at once."));
+  }
+
+  const origin = el("p", "origin");
+  const a = el("a", null, "github.com");
+  a.href = "https://github.com/" + owner + "/" + repo +
+    (dir ? "/tree/HEAD/" + dir : "");
+  a.target = "_blank"; a.rel = "noopener noreferrer";
+  origin.append(files.length + " files, " + dirs.length +
+    " folders — read live from ", a);
+  art.appendChild(origin);
+
+  view.appendChild(art);
+  currentArticle = resource;
+  scrollTo(0, 0);
+  syncBar();
+  checkAlign();
+}
+
+function fmtSize(bytes) {
+  if (bytes == null) return "";
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1048576) return Math.round(bytes / 1024) + " kB";
+  return (bytes / 1048576).toFixed(1) + " MB";
 }
 
 function backLink() {
