@@ -344,6 +344,22 @@ main{padding-block-end:6rem;min-height:0;flex:1 0 auto}
 .body pre code{background:none;padding:0}
 .body hr{border:0;border-top:1px solid var(--hair);margin:2.6rem 0}
 .body a{overflow-wrap:anywhere}
+/* Tables come from Markdown sources; a Telegraph page cannot hold one.
+   The wrapper scrolls so a wide table never widens the page itself. */
+.body .tablewrap{overflow-x:auto;margin:0 0 1.5rem}
+.body table{border-collapse:collapse;width:100%;font-size:.95rem}
+.body th,.body td{
+  text-align:left;vertical-align:top;
+  padding:.5rem 1.2rem .5rem 0;
+  border-bottom:1px solid var(--hair);
+}
+.body th{
+  font-family:var(--mono);font-size:.66rem;font-weight:400;
+  text-transform:uppercase;letter-spacing:.08em;color:var(--graphite);
+  border-bottom:1px solid var(--ink);white-space:nowrap;
+}
+.body tbody tr:last-child td{border-bottom:0}
+.body td code{white-space:nowrap}
 .origin{
   margin:3.5rem 0 0;padding-top:1.2rem;border-top:1px solid var(--hair);
   font-family:var(--sans);font-size:.8rem;color:var(--graphite);
@@ -762,6 +778,76 @@ function mdInline(text, parent, base) {
   if (at < text.length) parent.append(text.slice(at));
 }
 
+/* A pipe table. Telegraph has no table tag, so one could never be stored
+   in an article — but a GitHub page is rendered here directly, so it is
+   not bound by Telegraph's whitelist. Wide ones scroll inside their own
+   box rather than pushing the page sideways. */
+
+const TABLE_RULE = /^\s*\|?(?:\s*:?-{2,}:?\s*\|)*\s*:?-{2,}:?\s*\|?\s*$/;
+
+function splitRow(line) {
+  let text = line.trim();
+  if (text.startsWith("|")) text = text.slice(1);
+  if (text.endsWith("|")) text = text.slice(0, -1);
+
+  const cells = [];
+  let cell = "";
+
+  // Scanned by hand rather than with a lookbehind, which older Safari
+  // cannot even parse — it would throw before the page ran at all.
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\\" && text[i + 1] === "|") { cell += "|"; i++; continue; }
+    if (text[i] === "|") { cells.push(cell.trim()); cell = ""; continue; }
+    cell += text[i];
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+function alignOf(spec) {
+  const text = spec.trim();
+  const left = text.startsWith(":");
+  const right = text.endsWith(":");
+  if (left && right) return "center";
+  if (right) return "right";
+  return "";
+}
+
+const startsTable = (line, next) =>
+  line && line.includes("|") && next != null && TABLE_RULE.test(next);
+
+function renderTable(header, aligns, rows, parent, base) {
+  const wrap = el("div", "tablewrap");
+  const table = el("table");
+
+  const thead = el("thead");
+  const hrow = el("tr");
+  header.forEach((cell, i) => {
+    const th = el("th");
+    if (aligns[i]) th.style.textAlign = aligns[i];
+    mdInline(cell, th, base);
+    hrow.appendChild(th);
+  });
+  thead.appendChild(hrow);
+  table.appendChild(thead);
+
+  const tbody = el("tbody");
+  for (const row of rows) {
+    const tr = el("tr");
+    for (let i = 0; i < header.length; i++) {
+      const td = el("td");
+      if (aligns[i]) td.style.textAlign = aligns[i];
+      mdInline(row[i] || "", td, base);
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+
+  wrap.appendChild(table);
+  parent.appendChild(wrap);
+}
+
 function renderMarkdown(src, parent, base) {
   const lines = String(src).replace(/\r\n?/g, "\n").split("\n");
   let i = 0;
@@ -811,6 +897,18 @@ function renderMarkdown(src, parent, base) {
       continue;
     }
 
+    if (startsTable(line, lines[i + 1])) {
+      const header = splitRow(lines[i]);
+      const aligns = splitRow(lines[i + 1]).map(alignOf);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].trim() && lines[i].includes("|")) {
+        rows.push(splitRow(lines[i++]));
+      }
+      renderTable(header, aligns, rows, parent, base);
+      continue;
+    }
+
     const bullet = /^\s*(?:[-*+]|\d+[.)])\s+/;
     if (bullet.test(line)) {
       const ordered = /^\s*\d/.test(line);
@@ -826,7 +924,8 @@ function renderMarkdown(src, parent, base) {
 
     const buf = [];
     while (i < lines.length && lines[i].trim() &&
-           !/^(?:```|#{1,6}\s|\s*>|\s*(?:[-*+]|\d+[.)])\s)/.test(lines[i])) {
+           !/^(?:```|#{1,6}\s|\s*>|\s*(?:[-*+]|\d+[.)])\s)/.test(lines[i]) &&
+           !startsTable(lines[i], lines[i + 1])) {
       buf.push(lines[i++].trim());
     }
     para(buf);
