@@ -697,6 +697,13 @@ const isGh = path => typeof path === "string" && path.startsWith("gh:");
 const isTree = path => typeof path === "string" && path.startsWith("ght:");
 const isResource = path => isGh(path) || isTree(path);
 
+/* "gh:owner/repo" and nothing further is a repository; anything longer is
+   one file inside one. A section suffix is cut first, so a repository's
+   Development page still counts as that repository on the index rather
+   than being mistaken for a file. */
+const isRepoPath = path =>
+  isGh(path) && path.slice(3).split("@")[0].split("/").length === 2;
+
 /* The sections of a repository, spelled the way github.com spells them, so
    that putting "https://" in front of any of these routes lands on the same
    thing at the source. There is deliberately no "readme": github has no such
@@ -772,6 +779,21 @@ function ghSection(resource) {
   const [name, arg = null] = resource.slice(at + 1).split("/");
   const section = name === "issues" && arg ? "issue" : name;
   return { repo: head, section, arg };
+}
+
+/* A GitHub token is recognised by its shape, the same way the bot
+   recognises a pasted Telegraph token. gho_ is what `gh auth token` hands
+   out and carries write access to private repositories; github_pat_ is the
+   fine-grained kind that can be scoped to public reads. The difference is
+   worth saying out loud to whoever pastes one. */
+const GH_TOKEN = /^(gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})$/;
+
+const looksLikeGhToken = text =>
+  typeof text === "string" && GH_TOKEN.test(text.trim());
+
+function ghTokenKind(text) {
+  if (!looksLikeGhToken(text)) return null;
+  return text.trim().startsWith("github_pat_") ? "fine" : "broad";
 }
 
 /* ---------- end pure ---------- */
@@ -963,12 +985,8 @@ function ghResource(url) {
   return "gh:" + page[1] + "/" + page[2] + (page[3] ? "/" + page[3] : "");
 }
 
-// isGh, isTree and isResource are defined in the pure region above, beside
-// the routing that uses them.
-
-// "gh:owner/repo" and nothing further is a repository; anything longer is
-// one file inside one.
-const isRepoPath = path => isGh(path) && path.slice(3).split("/").length === 2;
+// isGh, isTree, isResource and isRepoPath are defined in the pure region
+// above, beside the routing that uses them.
 
 /* Files that are not worth fetching as text. */
 const BINARY = new Set(["png","jpg","jpeg","gif","webp","ico","bmp","pdf","zip",
@@ -985,6 +1003,65 @@ const MAX_FILE = 400 * 1024;
    cpython's 6,435 entries come back untruncated. It is the only rate
    limited call in the whole feature (60/hour), so it is cached and every
    file afterwards comes from raw, which has no limit at all. */
+/* The token raises the ceiling from 60 requests an hour to 5,000. It does
+   not change what is asked for: the same calls are made either way. It
+   lives in sessionStorage, so it dies with the tab, and it is sent to
+   api.github.com and nowhere else. */
+const GH_TOKEN_KEY = "ghtoken";
+
+const ghToken = () => {
+  try { return sessionStorage.getItem(KEEP + GH_TOKEN_KEY) || null; }
+  catch (err) { return null; }
+};
+
+const ghAuth = () => {
+  const token = ghToken();
+  return token ? { headers: { Authorization: "Bearer " + token } } : undefined;
+};
+
+/* Its own type, so a pane can tell "the budget is gone" from "GitHub had
+   nothing", and offer the token box for the one and not the other. */
+class RateLimited extends Error {
+  constructor() {
+    super("GitHub is rate limiting this browser — try again in an hour, " +
+          "or paste a token to raise the limit");
+  }
+}
+
+async function ghApi(path) {
+  const key = "api:" + path;
+
+  const kept = cached(key, true);
+  if (kept) return kept;
+
+  const res = await fetch("https://api.github.com" + path, ghAuth());
+
+  // 403 and 429 both mean the budget is gone. 401 means the token itself
+  // was refused, and saying so is more use than saying "rate limited".
+  if (res.status === 401) throw new Error("that token was refused by GitHub");
+  if (res.status === 403 || res.status === 429) throw new RateLimited();
+  if (!res.ok) throw new Error("GitHub had nothing at " + path);
+
+  return keep(key, await res.json(), true);
+}
+
+/* The four calls a repository page costs, asked for at once. Each is
+   allowed to fail on its own: a reader who has run out of budget still gets
+   every section whose data arrived, and the README always, because that
+   comes from raw and is not rate limited at all. */
+async function ghRepoData(repo) {
+  const ask = path => ghApi("/repos/" + repo + path).catch(err => ({ error: err }));
+
+  const [meta, issues, releases, commits] = await Promise.all([
+    ask(""),
+    ask("/issues?state=all&per_page=100"),
+    ask("/releases?per_page=100"),
+    ask("/commits?per_page=100")
+  ]);
+
+  return { meta, issues, releases, commits };
+}
+
 async function ghTree(owner, repo) {
   const key = "tree:" + owner + "/" + repo;
 
@@ -992,11 +1069,9 @@ async function ghTree(owner, repo) {
   if (kept) return kept;
 
   const res = await fetch("https://api.github.com/repos/" + owner + "/" +
-    repo + "/git/trees/HEAD?recursive=1");
+    repo + "/git/trees/HEAD?recursive=1", ghAuth());
 
-  if (res.status === 403) {
-    throw new Error("GitHub is rate limiting this browser — try again in an hour");
-  }
+  if (res.status === 403 || res.status === 429) throw new RateLimited();
   if (!res.ok) throw new Error("could not read that repository");
 
   const data = await res.json();

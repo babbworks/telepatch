@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { loadPure } from "./extract.mjs";
 
-const { ghFromParts, ghToParts, ghSection } = loadPure();
+const { ghFromParts, ghToParts, ghSection, isRepoPath } = loadPure();
 
 test("a bare repository is the overview", () => {
   assert.equal(ghFromParts(["github.com", "o", "r"]), "gh:o/r");
@@ -74,4 +74,12 @@ test("a file is not a section", () => {
 
 test("an unknown github path is not invented into a section", () => {
   assert.equal(ghFromParts(["github.com", "o", "r", "settings"]), "gh:o/r");
+});
+
+test("a repository entry is still a repository once it has a section", () => {
+  assert.equal(isRepoPath("gh:o/r"), true);
+  assert.equal(isRepoPath("gh:o/r@issues"), true, "the index counts this as a repo, not a file");
+  assert.equal(isRepoPath("gh:o/r@issues/144"), true);
+  assert.equal(isRepoPath("gh:o/r/bot.py"), false);
+  assert.equal(isRepoPath("ght:o/r/docs"), false);
 });
