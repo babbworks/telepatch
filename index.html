@@ -564,12 +564,16 @@ body.wide{--col:68rem}
   font-family:var(--mono);font-size:.65rem;font-weight:400;
   text-transform:uppercase;letter-spacing:.09em;
   color:var(--graphite);
-  display:flex;margin:1.1rem 0 .35rem;
+  display:flex;gap:.6rem;margin:1.4rem 0 .35rem;
 }
 .dash h3:first-child,.pane h3:first-child{margin-top:0}
-.dash h3 a,.pane h3 a{margin-left:auto;text-decoration:none}
+/* The date of a release, and the "all →" of a block, both sit at the far
+   end of their heading rather than against the title. */
+.dash h3 a,.pane h3 a,.pane h3 span{margin-left:auto;text-decoration:none}
 
-.rows .row{
+/* Not scoped to .rows: the timeline and the release assets append rows
+   straight into their pane, and a row must look the same wherever it is. */
+.row{
   display:flex;gap:.55rem;align-items:baseline;
   padding-block:.3rem;border-bottom:1px solid var(--hair);
 }
@@ -586,6 +590,54 @@ body.wide{--col:68rem}
   border:1px solid var(--hair);border-radius:2px;padding-inline:.25rem;
 }
 .row .when{font-family:var(--mono);font-size:.62rem;color:var(--graphite);flex:none}
+
+/* ---- filtering ---- */
+.find{
+  width:100%;font-family:var(--mono);font-size:.85rem;
+  background:none;color:var(--ink);
+  border:0;border-bottom:1px solid var(--ink);
+  padding-block:.3rem;
+}
+.find::placeholder{color:var(--graphite);opacity:1}
+.active{
+  font-family:var(--mono);font-size:.62rem;
+  text-transform:uppercase;letter-spacing:.06em;
+  color:var(--graphite);display:flex;gap:.6rem;align-items:baseline;
+  margin:.45rem 0 .7rem;
+}
+.active .clear{
+  background:none;border:0;padding:0;cursor:pointer;
+  font:inherit;color:var(--lamp);margin-left:auto;
+}
+.facets h4{
+  font-family:var(--mono);font-size:.62rem;font-weight:400;
+  text-transform:uppercase;letter-spacing:.09em;
+  color:var(--graphite);margin:.9rem 0 .25rem;
+}
+.facets h4:first-child{margin-top:0}
+.facets a{
+  display:flex;justify-content:space-between;gap:.5rem;
+  font-family:var(--mono);font-size:.66rem;
+  color:var(--ink);text-decoration:none;
+  padding-block:.18rem;border-bottom:1px solid var(--hair);
+}
+.facets a span:last-child{color:var(--graphite)}
+.facets a.on,.facets a.on span:last-child{color:var(--patch)}
+.facets a.dim{opacity:.35}
+
+/* Narrow: the facet rail becomes a chip row above the list. It is the same
+   markup restyled — one component, not a second one built for phones —
+   because a filter nobody can see is a filter nobody uses. */
+@media (max-width:48rem){
+  .facets{display:flex;flex-wrap:wrap;gap:.35rem;order:-1;margin-bottom:.6rem}
+  .facets h4{display:none}
+  .facets a{
+    border:1px solid var(--hair);border-radius:2px;
+    padding:.06rem .35rem;font-size:.62rem;gap:.3rem;
+  }
+  .facets a.on{background:var(--patch);border-color:var(--patch);color:var(--paper)}
+  .facets a.on span:last-child{color:var(--paper);opacity:.65}
+}
 
 /* ---- repository listing ---- */
 .crumb{
@@ -1797,6 +1849,10 @@ function mdUrl(raw, base) {
   try { return new URL(value, base).href; } catch (err) { return ""; }
 }
 
+/* Whether an image in markdown becomes an <img> or a link. See the note
+   where renderMarkdown sets it. */
+let mdImages = true;
+
 function mdInline(text, parent, base) {
   MD_INLINE.lastIndex = 0;
   let at = 0, m;
@@ -1808,10 +1864,21 @@ function mdInline(text, parent, base) {
 
     else if (m[3] != null) {
       const src = mdUrl(m[3], base);
-      if (src) {
+
+      if (src && !mdImages) {
+        /* Off for text the publisher did not write. On a public repository
+           anybody may open an issue, and an image in one is a request every
+           reader's browser would make to a host nobody here chose. The
+           address still reaches the reader, as a link they may follow. */
+        const a = el("a", null, m[2] || src);
+        a.href = src; a.target = "_blank"; a.rel = "noopener noreferrer nofollow";
+        parent.appendChild(a);
+
+      } else if (src) {
         const img = document.createElement("img");
         img.src = src; img.alt = m[2] || ""; img.loading = "lazy";
         parent.appendChild(img);
+
       } else parent.append(m[2] || "");
     }
 
@@ -1906,7 +1973,19 @@ function renderTable(header, aligns, rows, parent, base) {
   parent.appendChild(wrap);
 }
 
-function renderMarkdown(src, parent, base) {
+function renderMarkdown(src, parent, base, opts) {
+  /* Held for the duration of one call rather than threaded through six
+     call sites. Rendering is synchronous from here to the last node, so
+     two of these can never interleave. */
+  mdImages = !(opts && opts.images === false);
+  try {
+    renderMarkdownInner(src, parent, base);
+  } finally {
+    mdImages = true;
+  }
+}
+
+function renderMarkdownInner(src, parent, base) {
   const lines = String(src).replace(/\r\n?/g, "\n").split("\n");
   let i = 0;
 
@@ -2253,6 +2332,12 @@ function paint() {
 
 async function showArticle(path) {
   if (isTree(path)) return showTree(path);
+
+  // A section is its own pane. Overview is the bare repository route and
+  // keeps the ordinary article furniture, so it goes on to showGithub.
+  const part = ghSection(path);
+  if (part && part.section !== "overview") return showSection(path);
+
   if (isGh(path)) return showGithub(path);
   syncMeta();
   const view = $("view");
@@ -2639,6 +2724,268 @@ function overview(art, repo, data) {
 
   dash.append(left, factsRail(meta, issues, pulls, releases, commits));
   art.appendChild(dash);
+}
+
+/* ---------- Development ---------- */
+
+/* The facets and the field narrow the same set, so both read one filter
+   object and both are redrawn whenever either changes. Nothing here costs a
+   request: it is all slicing the payload already fetched. */
+function development(pane, repo, data) {
+  if (data.issues.error) {
+    pane.appendChild(paneError(data.issues.error));
+    return;
+  }
+
+  const { issues } = splitIssues(okList(data.issues));
+  const filter = { state: "open", labels: [], milestone: null, text: "" };
+
+  const dash = el("div", "dash");
+  const left = el("div");
+  const facets = el("aside", "facets");
+  dash.append(left, facets);
+
+  const field = el("input", "find");
+  field.type = "search";
+  field.placeholder = "filter";
+  field.setAttribute("aria-label", "Filter issues");
+
+  const said = el("p", "active");
+  const list = el("div", "rows");
+  left.append(field, said, list);
+
+  const draw = () => {
+    const shown = filterIssues(issues, filter);
+
+    list.replaceChildren();
+    for (const i of shown) {
+      const row = el("div", "row");
+      const title = el("span", "t");
+      const a = el("a", null, i.title);
+      a.href = link(master, "gh:" + repo + "@issues/" + i.number);
+      title.appendChild(a);
+
+      row.append(el("span", "n", "#" + i.number), title);
+
+      const label = labelsOf(i)[0];
+      if (label) row.appendChild(el("span", "tag", label));
+      row.appendChild(el("span", "when", ago(i.updated_at)));
+      list.appendChild(row);
+    }
+    if (!shown.length) list.appendChild(el("p", "empty", "Nothing matches that."));
+
+    /* One line saying what is showing. With two mechanisms narrowing one
+       list it is otherwise easy to lose track of why three things are left. */
+    const bits = [];
+    if (filter.state !== "all") bits.push(filter.state);
+    for (const l of filter.labels) bits.push("label:" + l);
+    if (filter.milestone) bits.push("milestone:" + filter.milestone);
+    if (filter.text) bits.push('"' + filter.text + '"');
+
+    said.replaceChildren();
+    said.append("Showing " + shown.length + " of " + issues.length +
+                (bits.length ? " — " + bits.join(" · ") : ""));
+
+    if (bits.length) {
+      const clear = el("button", "clear", "clear ×");
+      clear.type = "button";
+      clear.addEventListener("click", () => {
+        filter.state = "all"; filter.labels = []; filter.milestone = null;
+        filter.text = ""; field.value = ""; draw();
+      });
+      said.appendChild(clear);
+    }
+
+    drawFacets(facets, facetCounts(issues, filter), filter, draw);
+  };
+
+  field.addEventListener("input", () => { filter.text = field.value; draw(); });
+  draw();
+  pane.appendChild(dash);
+}
+
+/* A facet whose count falls to zero dims rather than disappearing, so the
+   rail keeps its shape and the reader can see what their typing excluded. */
+function drawFacets(host, counts, filter, redraw) {
+  host.replaceChildren();
+
+  const group = (title, entries, isOn, toggle) => {
+    if (!entries.length) return;
+    host.appendChild(el("h4", null, title));
+
+    for (const [name, n] of entries) {
+      const a = el("a", n === 0 ? "dim" : null);
+      a.href = "#";
+      a.append(el("span", null, name), el("span", null, String(n)));
+      if (isOn(name)) a.classList.add("on");
+      a.addEventListener("click", e => { e.preventDefault(); toggle(name); redraw(); });
+      host.appendChild(a);
+    }
+  };
+
+  group("State", Object.entries(counts.state),
+    name => filter.state === name,
+    name => { filter.state = name; });
+
+  group("Label", Object.entries(counts.labels),
+    name => filter.labels.includes(name),
+    name => {
+      const at = filter.labels.indexOf(name);
+      if (at < 0) filter.labels.push(name); else filter.labels.splice(at, 1);
+    });
+
+  group("Milestone", Object.entries(counts.milestones),
+    name => filter.milestone === name,
+    name => { filter.milestone = filter.milestone === name ? null : name; });
+}
+
+/* ---------- Releases, Activity, one issue ---------- */
+
+function releases(pane, repo, data) {
+  if (data.releases.error) { pane.appendChild(paneError(data.releases.error)); return; }
+
+  const list = okList(data.releases);
+  if (!list.length) { pane.appendChild(el("p", "empty", "No releases.")); return; }
+
+  for (const r of list) {
+    const h = el("h3", null, r.tag_name + (r.name && r.name !== r.tag_name ? " — " + r.name : ""));
+    h.appendChild(el("span", null, fmtDate((r.published_at || "").slice(0, 10))));
+    pane.appendChild(h);
+
+    // Release notes are written by hands that already have push access —
+    // the same trust the readme gets — so their images render.
+    if (r.body) {
+      const prose = el("div", "body");
+      renderMarkdown(r.body, prose, rawBase(repo));
+      pane.appendChild(prose);
+    }
+
+    for (const asset of (r.assets || [])) {
+      const row = el("div", "row");
+      const cell = el("span", "t");
+      const a = el("a", null, asset.name);
+      a.href = asset.browser_download_url;
+      a.rel = "noopener";
+      cell.appendChild(a);
+      row.append(el("span", "n", "↓"), cell,
+                 el("span", "tag", Math.round(asset.size / 1024) + " kB"));
+      pane.appendChild(row);
+    }
+  }
+}
+
+/* Four lists become one stream, because "what has been happening" is one
+   question and GitHub only answers it in four places. */
+function activity(pane, repo, data) {
+  const feed = mergeActivity({
+    commits: okList(data.commits),
+    issues: okList(data.issues),
+    releases: okList(data.releases)
+  });
+
+  if (!feed.length) {
+    const why = [data.commits, data.issues, data.releases].find(p => p && p.error);
+    pane.appendChild(why ? paneError(why.error) : el("p", "empty", "Nothing to show."));
+    return;
+  }
+
+  let day = null;
+  for (const e of feed) {
+    const on = e.when.slice(0, 10);
+    if (on !== day) { day = on; pane.appendChild(el("h3", null, fmtDate(on))); }
+
+    const row = el("div", "row");
+    const cell = el("span", "t");
+
+    if (e.kind === "issue" || e.kind === "pull") {
+      const a = el("a", null, e.title);
+      a.href = link(master, "gh:" + repo + "@issues/" + e.id.slice(1));
+      cell.appendChild(a);
+    } else {
+      cell.append(e.title);
+    }
+
+    row.append(el("span", "n", e.id), cell, el("span", "tag", e.kind));
+    pane.appendChild(row);
+  }
+}
+
+function oneIssue(pane, repo, number, data) {
+  if (data.issues.error) { pane.appendChild(paneError(data.issues.error)); return; }
+
+  const found = okList(data.issues).find(i => String(i.number) === String(number));
+
+  /* The list is the most recent hundred. An older issue is simply not in
+     hand, and saying so beats a fifth request or a spinner. */
+  if (!found) {
+    pane.appendChild(el("p", "empty",
+      "Issue #" + number + " is not among the hundred most recent."));
+    return;
+  }
+
+  pane.appendChild(el("h1", null, found.title));
+
+  const meta = el("div", "strip");
+  meta.appendChild(el("b", null, "#" + found.number));
+  meta.appendChild(el("span", found.state === "open" ? "live" : null, found.state));
+  meta.appendChild(el("span", null, fmtDate((found.created_at || "").slice(0, 10))));
+  for (const l of labelsOf(found)) meta.appendChild(el("span", null, l));
+  pane.appendChild(meta);
+
+  /* An issue body is the one thing here written by somebody the publisher
+     did not choose — on a public repository anybody may open one. Rendering
+     its images would let a stranger point every reader's browser at a host
+     of their choosing, so images become links the reader may follow. */
+  if (found.body) {
+    const prose = el("div", "body");
+    renderMarkdown(found.body, prose, "", { images: false });
+    pane.appendChild(prose);
+  }
+}
+
+/* Overview is the bare repository route and keeps the ordinary article
+   furniture, so it stays in showGithub. Everything behind an "@" is its own
+   pane and renders here. */
+async function showSection(resource) {
+  syncMeta();
+  const part = ghSection(resource);
+  const view = $("view");
+
+  view.replaceChildren(el("p", "loading", "fetching " + part.repo + "…"));
+
+  const data = await ghRepoData(part.repo);
+  const name = part.repo.split("/")[1];
+
+  const heading = { issues: "Development", issue: "Development",
+                    releases: "Releases", pulse: "Activity" }[part.section];
+  document.title = name + " · " + heading + " · " + masterPage.title;
+
+  view.replaceChildren();
+  view.appendChild(backLink("gh:" + part.repo));
+
+  const art = el("article", "article");
+  art.appendChild(el("h1", null, name));
+
+  const { issues } = splitIssues(okList(data.issues));
+  art.appendChild(healthStrip(
+    okMeta(data.meta),
+    issues.filter(i => i.state === "open").length,
+    (okList(data.releases)[0] || {}).tag_name
+  ));
+  art.appendChild(sectionRail(part.repo, part.section, {
+    issues: issues.filter(i => i.state === "open").length,
+    releases: okList(data.releases).length
+  }));
+
+  const pane = el("div", "pane");
+  if (part.section === "issues") development(pane, part.repo, data);
+  if (part.section === "issue") oneIssue(pane, part.repo, part.arg, data);
+  if (part.section === "releases") releases(pane, part.repo, data);
+  if (part.section === "pulse") activity(pane, part.repo, data);
+
+  art.appendChild(pane);
+  view.appendChild(art);
+  checkAlign();
 }
 
 async function showGithub(resource) {
