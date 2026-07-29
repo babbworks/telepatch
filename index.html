@@ -494,6 +494,62 @@ main{padding-block-end:6rem;min-height:0;flex:1 0 auto}
 .hljs-strong{font-weight:700}
 .hljs-link{text-decoration:underline}
 
+/* ---- repository dashboard ---- */
+
+/* A repository page is a denser thing than an article and wants more room.
+   --col is the only width control on this site, so this changes that one
+   value rather than introducing a second column: every .col element still
+   resolves to an identical inline box, and the bar and the content still
+   share one left edge. Nothing here sets padding-inline or margin-inline —
+   see the note above .col, which this must not break. */
+body.wide{--col:68rem}
+
+/* The sections of a repository. Mono uppercase like every other small label
+   here, and the lamp marks the section you are in — an active state, which
+   is the only kind of thing it is allowed to mark. */
+.rail{
+  display:flex;gap:1.25rem;
+  border-bottom:1px solid var(--hair);
+  padding-block:.45rem;margin-bottom:1.2rem;
+  overflow-x:auto;scrollbar-width:none;
+}
+.rail::-webkit-scrollbar{display:none}
+.rail a{
+  font-family:var(--mono);font-size:.7rem;
+  text-transform:uppercase;letter-spacing:.08em;
+  color:var(--graphite);text-decoration:none;white-space:nowrap;
+}
+.rail a:hover{color:var(--ink)}
+.rail a[aria-current]{
+  color:var(--ink);
+  box-shadow:0 .4rem 0 -.32rem var(--lamp);
+}
+.rail sup{font-size:.85em;margin-left:.15rem}
+
+/* Narrow enough that the rail cannot hold every section: it scrolls, and
+   the mask says so rather than a scrollbar nobody can see on a phone. */
+@media (max-width:40rem){
+  .rail{
+    -webkit-mask-image:linear-gradient(90deg,#000 88%,transparent);
+    mask-image:linear-gradient(90deg,#000 88%,transparent);
+  }
+}
+
+.strip{
+  font-family:var(--mono);font-size:.65rem;
+  text-transform:uppercase;letter-spacing:.07em;
+  color:var(--graphite);
+  display:flex;gap:1rem;flex-wrap:wrap;
+  margin:0 0 .7rem;
+}
+.strip b{font-weight:400;color:var(--ink)}
+.strip .live{color:var(--lamp)}
+
+/* The dashboard's two tracks. Below the width that fits a 15rem rail the
+   grid collapses to one column and the rail's contents go above the list. */
+.dash{display:grid;grid-template-columns:1fr 15rem;gap:1.6rem;align-items:start}
+@media (max-width:48rem){ .dash{grid-template-columns:1fr;gap:1rem} }
+
 /* ---- repository listing ---- */
 .crumb{
   font-family:var(--mono);font-size:.7rem;
@@ -2336,6 +2392,83 @@ async function sharePage(title, btn) {
 /* A GitHub article, fetched at read time. Everything around it — the bar,
    the contents, the pager, the footer — is the same as a Telegraph one;
    only where the words came from differs. */
+/* ---------- the dashboard's chrome ---------- */
+
+/* Code is a tree route rather than a section, because it already was one
+   and its URL is github's own /tree/HEAD form. The rest hang off "@". */
+const RAIL = [
+  { key: "overview", name: "Overview",    at: "" },
+  { key: "code",     name: "Code",        at: null },
+  { key: "issues",   name: "Development", at: "issues" },
+  { key: "releases", name: "Releases",    at: "releases" },
+  { key: "pulse",    name: "Activity",    at: "pulse" }
+];
+
+function sectionRail(repo, active, counts) {
+  const nav = el("nav", "rail");
+  nav.setAttribute("aria-label", "Sections of this repository");
+
+  for (const item of RAIL) {
+    const id = item.key === "code" ? "ght:" + repo
+             : item.at ? "gh:" + repo + "@" + item.at
+             : "gh:" + repo;
+
+    const a = el("a", null, item.name);
+    a.href = link(master, id);
+
+    // "issue" is a single issue, which is still inside Development.
+    if (item.key === active || (item.key === "issues" && active === "issue")) {
+      a.setAttribute("aria-current", "page");
+    }
+
+    const n = counts && counts[item.key];
+    if (n) a.appendChild(el("sup", null, String(n)));
+
+    nav.appendChild(a);
+  }
+
+  return nav;
+}
+
+/* Updated, licence, stars, what is open, what is newest. The open count is
+   a live state and so may have the lamp; nothing else on this line may. */
+function healthStrip(meta, open, latest) {
+  const strip = el("div", "strip");
+
+  const add = (label, value, live) => {
+    if (value == null || value === "") return;
+    const span = el("span", live ? "live" : null);
+    if (label) span.append(label + " ");
+    span.appendChild(el("b", null, String(value)));
+    strip.appendChild(span);
+  };
+
+  add("Updated", ago(meta.pushed_at));
+  if (meta.license && meta.license.spdx_id && meta.license.spdx_id !== "NOASSERTION") {
+    add("", meta.license.spdx_id);
+  }
+  if (meta.stargazers_count) add("★", meta.stargazers_count);
+  if (meta.forks_count) add("Forks", meta.forks_count);
+  if (open) add("●", open + " open", true);
+  add("", latest);
+
+  return strip;
+}
+
+/* "2h ago" without a library, and without Intl.RelativeTimeFormat, whose
+   output varies by locale in ways this line has no room for. The site
+   formats its dates by hand elsewhere for the same sort of reason. */
+function ago(iso) {
+  const then = Date.parse(iso || "");
+  if (!then) return "";
+
+  const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
+  if (mins < 60) return mins + "m ago";
+  if (mins < 1440) return Math.round(mins / 60) + "h ago";
+  if (mins < 43200) return Math.round(mins / 1440) + "d ago";
+  return Math.round(mins / 43200) + "mo ago";
+}
+
 async function showGithub(resource) {
   syncMeta();
   const view = $("view");
@@ -2889,6 +3022,12 @@ async function start(r) {
 }
 
 function show(r) {
+  /* A repository is the only thing here wider than the reading measure.
+     Set from the route, so leaving one puts the measure back. A tree is a
+     repository page too — it is the Code section. */
+  document.body.classList.toggle("wide",
+    !!ghSection(r.article) || isTree(r.article));
+
   if (r.article) showArticle(r.article); else showIndex();
 }
 
