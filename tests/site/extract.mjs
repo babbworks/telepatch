@@ -12,18 +12,18 @@ import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-const OPEN = "/* ---------- pure: github ---------- */";
-const SHUT = "/* ---------- end pure ---------- */";
+/* Regions are named — "pure: github", "pure: urls" — so a fence can sit
+   beside the code it fences rather than everything pure being herded into
+   one place. Every region found is concatenated and evaluated together. */
+const REGION = /\/\* -+ pure:[^*]*-+ \*\/([\s\S]*?)\/\* -+ end pure -+ \*\//g;
 
 export function loadPure() {
   const html = readFileSync(join(root, "index.html"), "utf8");
 
-  const from = html.indexOf(OPEN);
-  const to = html.indexOf(SHUT);
-  if (from < 0 || to < 0) throw new Error("pure region markers not found in index.html");
-  if (to < from) throw new Error("pure region markers are the wrong way round");
+  const regions = [...html.matchAll(REGION)].map(m => m[1]);
+  if (!regions.length) throw new Error("no pure regions found in index.html");
 
-  const source = html.slice(from + OPEN.length, to);
+  const source = regions.join("\n");
 
   // Every top-level binding in the region is collected and handed back. The
   // region is pure by construction, so a bare context is enough — anything

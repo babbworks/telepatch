@@ -1851,6 +1851,21 @@ const MD_INLINE = new RegExp(
   "|\\*\\*([^*]+)\\*\\*|__([^_]+)__" +               // strong
   "|\\*([^*]+)\\*|_([^_]+)_", "g");                  // emphasis
 
+/* ---------- pure: urls ---------- */
+
+/* Every address that reaches an href or a src in rendered markdown passes
+   through here first, and anything whose scheme is not http, https or
+   mailto leaves as an empty string — which every caller treats as "render
+   the text, make no link". javascript: and data: die here.
+
+   The obvious way round it, hiding a scheme behind a tab or a newline for
+   the URL parser to strip back out, cannot reach this function: the
+   markdown pattern captures the address with [^)\s]+, so whitespace ends
+   the capture before a scheme can be reassembled.
+
+   Fenced because this is the one place a stranger's text becomes a link,
+   and an invariant that matters that much should be pinned by a test
+   rather than by a comment. See tests/site/urls.test.mjs. */
 function mdUrl(raw, base) {
   const value = String(raw == null ? "" : raw).trim();
   if (!value || value.startsWith("#")) return "";
@@ -1858,6 +1873,8 @@ function mdUrl(raw, base) {
   if (/^[a-z][a-z0-9+.\-]*:/i.test(value)) return "";
   try { return new URL(value, base).href; } catch (err) { return ""; }
 }
+
+/* ---------- end pure ---------- */
 
 /* Whether an image in markdown becomes an <img> or a link. See the note
    where renderMarkdown sets it. */
