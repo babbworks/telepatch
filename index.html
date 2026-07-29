@@ -122,8 +122,8 @@ a{color:var(--patch)}
    The bar's 1.25rem is right between the title and the pages; between two
    controls that belong together it is a gulf. */
 .navtools{
-  margin-left:auto;flex:none;
-  display:flex;align-items:baseline;gap:.4rem;
+  margin-left:auto;flex:none;align-self:center;
+  display:flex;align-items:center;gap:.4rem;
 }
 .catbtn{
   font-family:var(--mono);font-size:.7rem;
@@ -149,18 +149,17 @@ a{color:var(--patch)}
    wants within reach. Drawn rather than fetched, so it takes the bar's
    own colour in either theme and stays sharp at any size - there is no
    light version and dark version to keep in step. */
-/* Its bottom sits on the baseline of the text beside it. An inline
-   replaced element does that by definition, so the svg is left inline
-   rather than made a block - which would have centred it instead. */
+/* Centred against the text beside it. Baseline alignment was the first
+   attempt and does not survive contact with a <button>: browsers
+   synthesise a button's baseline from its bottom margin edge rather than
+   from its content, so the icon floated above the words. Centring is
+   decided by the box, not by the engine's opinion of it. */
 .globe{
-  flex:none;display:inline-block;line-height:1;
+  flex:none;display:flex;align-items:center;
   background:none;border:0;padding:0;cursor:pointer;
   color:var(--graphite);
 }
-.globe svg{
-  width:1.1rem;height:1.1rem;
-  display:inline;vertical-align:baseline;
-}
+.globe svg{width:1.05rem;height:1.05rem;display:block}
 /* Always there, so the bar does not change shape between publications.
    Dimmed until something is behind it, and not clickable then either -
    an enabled control that does nothing is worse than a quiet one. */
@@ -806,9 +805,18 @@ function recall(key) {
   }
 }
 
-/* Memory first, then the tab's store, then the network. */
-function cached(key) {
+/* Memory first, then the tab's store, then the network.
+
+   Only what is rate limited earns a place in the store. A Telegraph page
+   is content its publisher edits, and holding one for the life of a tab
+   meant a reader who reloaded after an edit still saw the old page - the
+   globe stayed dim on a site that had just been pointed somewhere. The
+   GitHub tree is the opposite: 60 an hour, and a repository's shape does
+   not change while somebody reads it. */
+function cached(key, persist) {
   if (cache.has(key)) return cache.get(key);
+
+  if (!persist) return null;
 
   const kept = recall(key);
   if (kept) cache.set(key, kept);
@@ -816,9 +824,9 @@ function cached(key) {
   return kept;
 }
 
-function keep(key, value) {
+function keep(key, value, persist) {
   cache.set(key, value);
-  remember(key, value);
+  if (persist) remember(key, value);
   return value;
 }
 
@@ -924,7 +932,7 @@ const MAX_FILE = 400 * 1024;
 async function ghTree(owner, repo) {
   const key = "tree:" + owner + "/" + repo;
 
-  const kept = cached(key);
+  const kept = cached(key, true);
   if (kept) return kept;
 
   const res = await fetch("https://api.github.com/repos/" + owner + "/" +
@@ -944,7 +952,7 @@ async function ghTree(owner, repo) {
     path: item.path, type: item.type, size: item.size,
   }));
 
-  return keep(key, { entries, truncated: !!data.truncated });
+  return keep(key, { entries, truncated: !!data.truncated }, true);
 }
 
 async function ghFetch(resource) {

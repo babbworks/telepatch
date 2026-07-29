@@ -180,10 +180,17 @@ files*. That is the only rate-limited call on the site — 60/hour per reader
 
 **Fix:** persist the tree to `sessionStorage`.
 
-### F10 — Website cache does not survive a reload · **done**
+### F10 — Website cache does not survive a reload · **wrong, reverted**
 
-`cache` is an in-memory `Map`. Reloading refetches the master post every
-time. `sessionStorage` would hold it for the tab's life.
+`cache` is an in-memory `Map`, so reloading refetches the master post.
+This was recorded as waste. It is not: a Telegraph page is content its
+publisher edits, and holding one for the life of a tab meant a reader who
+reloaded after an edit still saw the old page. It shipped, and the symptom
+was a globe staying dim on a site that had just been pointed somewhere.
+
+Only the GitHub tree persists now — 60 an hour, and a repository's shape
+does not change while somebody reads it. **Freshness beat one round trip,
+and the finding was wrong to weigh them the other way.**
 
 ### F11 — Highlighting a large file blocks the main thread · **done, measured**
 
