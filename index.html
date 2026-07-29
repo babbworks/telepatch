@@ -685,7 +685,17 @@ const el = (tag, cls, text) => {
    Internally a resource is still "gh:owner/repo/path" for a file and
    "ght:owner/repo/dir" for a listing. Only the URL spelling changes. */
 
+/* ---------- pure: github ---------- */
+/* Everything between these markers is pure: no DOM, no fetch, no state. It
+   is sliced out and evaluated on its own by tests/site/extract.mjs, which is
+   only possible while that stays true. Anything needing a document or a
+   network belongs below the closing marker. */
+
 const GH_HOST = "github.com";
+
+const isGh = path => typeof path === "string" && path.startsWith("gh:");
+const isTree = path => typeof path === "string" && path.startsWith("ght:");
+const isResource = path => isGh(path) || isTree(path);
 
 // URL segments (after the master) -> internal resource id, else null.
 function ghFromParts(parts) {
@@ -718,7 +728,7 @@ function ghToParts(resource) {
                      : [GH_HOST, owner, repo];
 }
 
-const isResource = path => isGh(path) || isTree(path);
+/* ---------- end pure ---------- */
 
 function route() {
   let h = location.hash.replace(/^#/, "").trim();
@@ -907,8 +917,8 @@ function ghResource(url) {
   return "gh:" + page[1] + "/" + page[2] + (page[3] ? "/" + page[3] : "");
 }
 
-const isGh = path => typeof path === "string" && path.startsWith("gh:");
-const isTree = path => typeof path === "string" && path.startsWith("ght:");
+// isGh, isTree and isResource are defined in the pure region above, beside
+// the routing that uses them.
 
 // "gh:owner/repo" and nothing further is a repository; anything longer is
 // one file inside one.
