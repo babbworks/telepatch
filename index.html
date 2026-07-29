@@ -494,6 +494,155 @@ main{padding-block-end:6rem;min-height:0;flex:1 0 auto}
 .hljs-strong{font-weight:700}
 .hljs-link{text-decoration:underline}
 
+/* ---- repository dashboard ---- */
+
+/* A repository page is a denser thing than an article and wants more room.
+   --col is the only width control on this site, so this changes that one
+   value rather than introducing a second column: every .col element still
+   resolves to an identical inline box, and the bar and the content still
+   share one left edge. Nothing here sets padding-inline or margin-inline —
+   see the note above .col, which this must not break. */
+body.wide{--col:68rem}
+
+/* The sections of a repository. Mono uppercase like every other small label
+   here, and the lamp marks the section you are in — an active state, which
+   is the only kind of thing it is allowed to mark. */
+.rail{
+  display:flex;gap:1.25rem;
+  border-bottom:1px solid var(--hair);
+  padding-block:.45rem;margin-bottom:1.2rem;
+  overflow-x:auto;scrollbar-width:none;
+}
+.rail::-webkit-scrollbar{display:none}
+.rail a{
+  font-family:var(--mono);font-size:.7rem;
+  text-transform:uppercase;letter-spacing:.08em;
+  color:var(--graphite);text-decoration:none;white-space:nowrap;
+}
+.rail a:hover{color:var(--ink)}
+.rail a[aria-current]{
+  color:var(--ink);
+  box-shadow:0 .4rem 0 -.32rem var(--lamp);
+}
+.rail sup{font-size:.85em;margin-left:.15rem}
+
+/* Narrow enough that the rail cannot hold every section: it scrolls, and
+   the mask says so rather than a scrollbar nobody can see on a phone. */
+@media (max-width:40rem){
+  .rail{
+    -webkit-mask-image:linear-gradient(90deg,#000 88%,transparent);
+    mask-image:linear-gradient(90deg,#000 88%,transparent);
+  }
+}
+
+.strip{
+  font-family:var(--mono);font-size:.65rem;
+  text-transform:uppercase;letter-spacing:.07em;
+  color:var(--graphite);
+  display:flex;gap:1rem;flex-wrap:wrap;
+  margin:0 0 .7rem;
+}
+.strip b{font-weight:400;color:var(--ink)}
+.strip .live{color:var(--lamp)}
+
+/* The dashboard's two tracks. Below the width that fits a 15rem rail the
+   grid collapses to one column and the rail's contents go above the list. */
+.dash{display:grid;grid-template-columns:1fr 15rem;gap:1.6rem;align-items:start}
+@media (max-width:48rem){ .dash{grid-template-columns:1fr;gap:1rem} }
+
+.facts div{
+  display:flex;justify-content:space-between;gap:.75rem;
+  font-family:var(--mono);font-size:.66rem;
+  text-transform:uppercase;letter-spacing:.05em;
+  color:var(--graphite);
+  padding-block:.25rem;border-bottom:1px solid var(--hair);
+}
+.facts div b{font-weight:400;color:var(--ink);text-align:right}
+.facts div:last-child{border-bottom:0}
+
+.dash h3,.pane h3{
+  font-family:var(--mono);font-size:.65rem;font-weight:400;
+  text-transform:uppercase;letter-spacing:.09em;
+  color:var(--graphite);
+  display:flex;gap:.6rem;margin:1.4rem 0 .35rem;
+}
+.dash h3:first-child,.pane h3:first-child{margin-top:0}
+/* The date of a release, and the "all →" of a block, both sit at the far
+   end of their heading rather than against the title. */
+.dash h3 a,.pane h3 a,.pane h3 span{margin-left:auto;text-decoration:none}
+
+/* Not scoped to .rows: the timeline and the release assets append rows
+   straight into their pane, and a row must look the same wherever it is. */
+.row{
+  display:flex;gap:.55rem;align-items:baseline;
+  padding-block:.3rem;border-bottom:1px solid var(--hair);
+}
+.rows .row:last-child{border-bottom:0}
+.row .n{
+  font-family:var(--mono);font-size:.7rem;color:var(--graphite);
+  flex:none;min-width:3.2rem;
+}
+.row .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .t a{text-decoration:none}
+.row .tag{
+  font-family:var(--mono);font-size:.6rem;flex:none;
+  text-transform:uppercase;letter-spacing:.06em;color:var(--graphite);
+  border:1px solid var(--hair);border-radius:2px;padding-inline:.25rem;
+}
+.row .when{font-family:var(--mono);font-size:.62rem;color:var(--graphite);flex:none}
+
+/* ---- filtering ---- */
+.find{
+  width:100%;font-family:var(--mono);font-size:.85rem;
+  background:none;color:var(--ink);
+  border:0;border-bottom:1px solid var(--ink);
+  padding-block:.3rem;
+}
+.find::placeholder{color:var(--graphite);opacity:1}
+.active{
+  font-family:var(--mono);font-size:.62rem;
+  text-transform:uppercase;letter-spacing:.06em;
+  color:var(--graphite);display:flex;gap:.6rem;align-items:baseline;
+  margin:.45rem 0 .7rem;
+}
+.active .clear{
+  background:none;border:0;padding:0;cursor:pointer;
+  font:inherit;color:var(--lamp);margin-left:auto;
+}
+.tokenbox{max-width:34rem;margin-top:1.2rem}
+.tokenbox .active{display:block;text-transform:none;letter-spacing:0;line-height:1.5}
+.tokenbox .active b{color:var(--lamp);font-weight:400}
+.tokenbox .clear{margin-left:.5rem}
+.facets h4{
+  font-family:var(--mono);font-size:.62rem;font-weight:400;
+  text-transform:uppercase;letter-spacing:.09em;
+  color:var(--graphite);margin:.9rem 0 .25rem;
+}
+.facets h4:first-child{margin-top:0}
+.facets a{
+  display:flex;justify-content:space-between;gap:.5rem;
+  font-family:var(--mono);font-size:.66rem;
+  color:var(--ink);text-decoration:none;
+  padding-block:.18rem;border-bottom:1px solid var(--hair);
+}
+.facets a span:last-child{color:var(--graphite)}
+.facets a.on,.facets a.on span:last-child{color:var(--patch)}
+.facets a.dim{opacity:.35}
+
+/* Narrow: the facet rail becomes a chip row above the list. It is the same
+   markup restyled — one component, not a second one built for phones —
+   because a filter nobody can see is a filter nobody uses. */
+@media (max-width:48rem){
+  .facets{display:flex;flex-wrap:wrap;gap:.35rem;order:-1;margin-bottom:.6rem}
+  .facets h4{display:none}
+  .facets a{
+    border:1px solid var(--hair);border-radius:2px;
+    padding:.06rem .35rem;font-size:.62rem;gap:.3rem;
+  }
+  .facets a.on{background:var(--patch);border-color:var(--patch);color:var(--paper)}
+  .facets a.on span:last-child{color:var(--paper);opacity:.65}
+}
+
 /* ---- repository listing ---- */
 .crumb{
   font-family:var(--mono);font-size:.7rem;
@@ -685,7 +834,30 @@ const el = (tag, cls, text) => {
    Internally a resource is still "gh:owner/repo/path" for a file and
    "ght:owner/repo/dir" for a listing. Only the URL spelling changes. */
 
+/* ---------- pure: github ---------- */
+/* Everything between these markers is pure: no DOM, no fetch, no state. It
+   is sliced out and evaluated on its own by tests/site/extract.mjs, which is
+   only possible while that stays true. Anything needing a document or a
+   network belongs below the closing marker. */
+
 const GH_HOST = "github.com";
+
+const isGh = path => typeof path === "string" && path.startsWith("gh:");
+const isTree = path => typeof path === "string" && path.startsWith("ght:");
+const isResource = path => isGh(path) || isTree(path);
+
+/* "gh:owner/repo" and nothing further is a repository; anything longer is
+   one file inside one. A section suffix is cut first, so a repository's
+   Development page still counts as that repository on the index rather
+   than being mistaken for a file. */
+const isRepoPath = path =>
+  isGh(path) && path.slice(3).split("@")[0].split("/").length === 2;
+
+/* The sections of a repository, spelled the way github.com spells them, so
+   that putting "https://" in front of any of these routes lands on the same
+   thing at the source. There is deliberately no "readme": github has no such
+   path, and the README lives beneath Overview as it does there. */
+const GH_SECTIONS = ["issues", "releases", "pulse"];
 
 // URL segments (after the master) -> internal resource id, else null.
 function ghFromParts(parts) {
@@ -697,12 +869,28 @@ function ghFromParts(parts) {
 
   if (first !== GH_HOST || parts.length < 3) return null;
   const owner = parts[1], repo = parts[2];
-  const kind = parts[3];                  // "blob", "tree", or nothing
-  const rest = parts.slice(5).join("/");  // parts[4] is the git ref
+  const base = "gh:" + owner + "/" + repo;
+  const kind = parts[3];                  // "blob", "tree", a section, or nothing
 
-  if (kind === "tree") return "ght:" + owner + "/" + repo + (rest ? "/" + rest : "");
-  if (kind === "blob" && rest) return "gh:" + owner + "/" + repo + "/" + rest;
-  return "gh:" + owner + "/" + repo;      // bare repository: the README
+  if (kind === "tree") {
+    const rest = parts.slice(5).join("/"); // parts[4] is the git ref
+    return "ght:" + owner + "/" + repo + (rest ? "/" + rest : "");
+  }
+  if (kind === "blob") {
+    const rest = parts.slice(5).join("/");
+    return rest ? base + "/" + rest : base;
+  }
+
+  // A section carries no git ref, so nothing is skipped here: in
+  // "issues/144" the 144 is the section's argument, not a path under a ref.
+  if (GH_SECTIONS.includes(kind)) {
+    const arg = parts[4];
+    return base + "@" + kind + (arg ? "/" + arg : "");
+  }
+
+  // Any other github path — /settings, /actions, /wiki — is not something
+  // this site renders. Landing on the repository beats a dead page.
+  return base;
 }
 
 /* Internal resource id -> URL segments. The ref is spelled out as HEAD so
@@ -713,12 +901,237 @@ function ghToParts(resource) {
     const [owner, repo, ...rest] = resource.slice(4).split("/");
     return [GH_HOST, owner, repo, "tree", "HEAD", ...rest];
   }
+
+  const at = resource.indexOf("@");
+  if (at >= 0) {
+    const [owner, repo] = resource.slice(3, at).split("/");
+    return [GH_HOST, owner, repo, ...resource.slice(at + 1).split("/")];
+  }
+
   const [owner, repo, ...rest] = resource.slice(3).split("/");
   return rest.length ? [GH_HOST, owner, repo, "blob", "HEAD", ...rest]
                      : [GH_HOST, owner, repo];
 }
 
-const isResource = path => isGh(path) || isTree(path);
+/* A resource id -> which repository, which section, and its argument.
+   Returns null for anything that is not a repository page: a file or a
+   directory is content, not a section of the dashboard. */
+function ghSection(resource) {
+  if (!isGh(resource)) return null;
+
+  const at = resource.indexOf("@");
+  const head = at < 0 ? resource.slice(3) : resource.slice(3, at);
+  if (head.split("/").length !== 2) return null;   // a path to a file
+
+  if (at < 0) return { repo: head, section: "overview", arg: null };
+
+  const [name, arg = null] = resource.slice(at + 1).split("/");
+  const section = name === "issues" && arg ? "issue" : name;
+  return { repo: head, section, arg };
+}
+
+/* A GitHub token is recognised by its shape, the same way the bot
+   recognises a pasted Telegraph token. gho_ is what `gh auth token` hands
+   out and carries write access to private repositories; github_pat_ is the
+   fine-grained kind that can be scoped to public reads. The difference is
+   worth saying out loud to whoever pastes one. */
+const GH_TOKEN = /^(gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})$/;
+
+const looksLikeGhToken = text =>
+  typeof text === "string" && GH_TOKEN.test(text.trim());
+
+function ghTokenKind(text) {
+  if (!looksLikeGhToken(text)) return null;
+  return text.trim().startsWith("github_pat_") ? "fine" : "broad";
+}
+
+/* Each of the four calls may have failed on its own, so every source is
+   checked for shape before it is read. A section missing from a page is
+   better than a page that is not there. */
+const listOf = value => (Array.isArray(value) ? value : []);
+
+/* In GitHub's REST API a pull request is an issue carrying a pull_request
+   key, so one call answers both and the split happens here rather than in a
+   second request. */
+function splitIssues(list) {
+  const all = listOf(list);
+  return {
+    issues: all.filter(i => !i.pull_request),
+    pulls: all.filter(i => !!i.pull_request)
+  };
+}
+
+const labelsOf = i => (i.labels || []).map(l => (typeof l === "string" ? l : l.name));
+
+/* Sections are named for what somebody wants — bugs, ideas, what is done —
+   rather than for the query that finds them. A repository whose labels do
+   not match simply shows fewer of them; Open and Completed always work,
+   because state exists everywhere. */
+const SECTION_RULES = [
+  { key: "roadmap",   name: "Roadmap",       label: "roadmap", state: "open" },
+  { key: "bugs",      name: "Bugs",          label: "bug",     state: "open" },
+  { key: "features",  name: "Features",      label: "feature", state: "open" },
+  { key: "ideas",     name: "Ideas",         label: "idea",    state: "open" },
+  { key: "docs",      name: "Documentation", label: "docs",    state: "open" },
+  { key: "open",      name: "Open",          label: null,      state: "open" },
+  { key: "completed", name: "Completed",     label: null,      state: "closed" }
+];
+
+function deriveSections(issues) {
+  const all = listOf(issues);
+
+  return SECTION_RULES
+    .map(rule => ({
+      key: rule.key,
+      name: rule.name,
+      label: rule.label,
+      items: all.filter(i =>
+        i.state === rule.state &&
+        (rule.label === null || labelsOf(i).includes(rule.label)))
+    }))
+    .filter(section => section.items.length > 0);
+}
+
+/* "is:open", "label:bug" and bare words in one field. The prefixes are
+   understood so that somebody who knows them is not slowed down; nobody is
+   ever required to type one. */
+function parseFilterText(text) {
+  const out = { state: null, milestone: null, labels: [], words: [] };
+
+  for (const term of String(text || "").trim().split(/\s+/).filter(Boolean)) {
+    const [head, ...tail] = term.split(":");
+    const value = tail.join(":");
+    const key = head.toLowerCase();
+
+    if (value && key === "is") out.state = value.toLowerCase();
+    else if (value && key === "label") out.labels.push(value.toLowerCase());
+    else if (value && key === "milestone") out.milestone = value;
+    else out.words.push(term.toLowerCase());
+  }
+
+  return out;
+}
+
+function filterIssues(issues, filter) {
+  const all = listOf(issues);
+  const f = filter || {};
+  const typed = parseFilterText(f.text);
+
+  const state = typed.state || f.state || "all";
+  const labels = [...(f.labels || []), ...typed.labels].map(l => l.toLowerCase());
+  const milestone = typed.milestone || f.milestone || null;
+
+  return all.filter(i => {
+    if (state !== "all" && i.state !== state) return false;
+
+    const mine = labelsOf(i).map(l => l.toLowerCase());
+    if (labels.length && !labels.every(l => mine.includes(l))) return false;
+
+    if (milestone && (!i.milestone || i.milestone.title !== milestone)) return false;
+
+    if (typed.words.length) {
+      const hay = (i.title + " " + mine.join(" ")).toLowerCase();
+      if (!typed.words.every(w => hay.includes(w))) return false;
+    }
+
+    return true;
+  });
+}
+
+/* Both the facets and the field narrow the same set, so a facet's count is
+   what would remain if it were applied as well. A facet that falls to zero
+   is still listed — the rail keeps its shape, and the reader can see what
+   their typing excluded rather than watching options vanish. */
+function facetCounts(issues, filter) {
+  const all = listOf(issues);
+  const f = filter || {};
+  const countWith = extra => filterIssues(all, { ...f, ...extra }).length;
+
+  const labels = {};
+  for (const i of all) for (const l of labelsOf(i)) labels[l] = 0;
+  for (const l of Object.keys(labels)) {
+    labels[l] = countWith({ labels: [...(f.labels || []), l] });
+  }
+
+  const milestones = {};
+  for (const i of all) if (i.milestone) milestones[i.milestone.title] = 0;
+  for (const m of Object.keys(milestones)) milestones[m] = countWith({ milestone: m });
+
+  return {
+    state: {
+      open: countWith({ state: "open" }),
+      closed: countWith({ state: "closed" }),
+      all: countWith({ state: "all" })
+    },
+    labels,
+    milestones
+  };
+}
+
+/* One chronological stream instead of four lists. A commit, an issue, a
+   pull request and a release are the same kind of event to somebody asking
+   what has been happening here lately. */
+function mergeActivity(sources) {
+  const s = sources || {};
+  const out = [];
+
+  for (const c of listOf(s.commits)) {
+    const info = c.commit || {};
+    out.push({
+      kind: "commit",
+      id: String(c.sha || "").slice(0, 7),
+      title: String(info.message || "").split("\n")[0],
+      when: (info.author || {}).date || ""
+    });
+  }
+
+  for (const i of listOf(s.issues)) {
+    out.push({
+      kind: i.pull_request ? "pull" : "issue",
+      id: "#" + i.number,
+      title: i.title || "",
+      when: i.created_at || ""
+    });
+  }
+
+  for (const r of listOf(s.releases)) {
+    out.push({
+      kind: "release",
+      id: r.tag_name || "",
+      title: r.name || r.tag_name || "",
+      when: r.published_at || r.created_at || ""
+    });
+  }
+
+  // ISO 8601 in UTC sorts correctly as text, which is why no date is parsed
+  // here. One without a date is dropped rather than sorted arbitrarily.
+  return out.filter(e => e.when).sort((a, b) => (a.when < b.when ? 1 : -1));
+}
+
+/* /contributors would be a fifth call for one line of the facts rail. The
+   authors of the commits already in hand answer the question well enough,
+   and the rail says "recent" so the number is not claimed to be more. */
+function deriveContributors(commits) {
+  const tally = new Map();
+
+  for (const c of listOf(commits)) {
+    const name = ((c.commit || {}).author || {}).name;
+    if (name) tally.set(name, (tally.get(name) || 0) + 1);
+  }
+
+  return [...tally.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
+function countSince(commits, iso) {
+  return listOf(commits).filter(c => {
+    const when = ((c.commit || {}).author || {}).date;
+    return when && when >= iso;
+  }).length;
+}
+
+/* ---------- end pure ---------- */
 
 function route() {
   let h = location.hash.replace(/^#/, "").trim();
@@ -907,12 +1320,8 @@ function ghResource(url) {
   return "gh:" + page[1] + "/" + page[2] + (page[3] ? "/" + page[3] : "");
 }
 
-const isGh = path => typeof path === "string" && path.startsWith("gh:");
-const isTree = path => typeof path === "string" && path.startsWith("ght:");
-
-// "gh:owner/repo" and nothing further is a repository; anything longer is
-// one file inside one.
-const isRepoPath = path => isGh(path) && path.slice(3).split("/").length === 2;
+// isGh, isTree, isResource and isRepoPath are defined in the pure region
+// above, beside the routing that uses them.
 
 /* Files that are not worth fetching as text. */
 const BINARY = new Set(["png","jpg","jpeg","gif","webp","ico","bmp","pdf","zip",
@@ -929,6 +1338,65 @@ const MAX_FILE = 400 * 1024;
    cpython's 6,435 entries come back untruncated. It is the only rate
    limited call in the whole feature (60/hour), so it is cached and every
    file afterwards comes from raw, which has no limit at all. */
+/* The token raises the ceiling from 60 requests an hour to 5,000. It does
+   not change what is asked for: the same calls are made either way. It
+   lives in sessionStorage, so it dies with the tab, and it is sent to
+   api.github.com and nowhere else. */
+const GH_TOKEN_KEY = "ghtoken";
+
+const ghToken = () => {
+  try { return sessionStorage.getItem(KEEP + GH_TOKEN_KEY) || null; }
+  catch (err) { return null; }
+};
+
+const ghAuth = () => {
+  const token = ghToken();
+  return token ? { headers: { Authorization: "Bearer " + token } } : undefined;
+};
+
+/* Its own type, so a pane can tell "the budget is gone" from "GitHub had
+   nothing", and offer the token box for the one and not the other. */
+class RateLimited extends Error {
+  constructor() {
+    super("GitHub is rate limiting this browser — try again in an hour, " +
+          "or paste a token to raise the limit");
+  }
+}
+
+async function ghApi(path) {
+  const key = "api:" + path;
+
+  const kept = cached(key, true);
+  if (kept) return kept;
+
+  const res = await fetch("https://api.github.com" + path, ghAuth());
+
+  // 403 and 429 both mean the budget is gone. 401 means the token itself
+  // was refused, and saying so is more use than saying "rate limited".
+  if (res.status === 401) throw new Error("that token was refused by GitHub");
+  if (res.status === 403 || res.status === 429) throw new RateLimited();
+  if (!res.ok) throw new Error("GitHub had nothing at " + path);
+
+  return keep(key, await res.json(), true);
+}
+
+/* The four calls a repository page costs, asked for at once. Each is
+   allowed to fail on its own: a reader who has run out of budget still gets
+   every section whose data arrived, and the README always, because that
+   comes from raw and is not rate limited at all. */
+async function ghRepoData(repo) {
+  const ask = path => ghApi("/repos/" + repo + path).catch(err => ({ error: err }));
+
+  const [meta, issues, releases, commits] = await Promise.all([
+    ask(""),
+    ask("/issues?state=all&per_page=100"),
+    ask("/releases?per_page=100"),
+    ask("/commits?per_page=100")
+  ]);
+
+  return { meta, issues, releases, commits };
+}
+
 async function ghTree(owner, repo) {
   const key = "tree:" + owner + "/" + repo;
 
@@ -936,11 +1404,9 @@ async function ghTree(owner, repo) {
   if (kept) return kept;
 
   const res = await fetch("https://api.github.com/repos/" + owner + "/" +
-    repo + "/git/trees/HEAD?recursive=1");
+    repo + "/git/trees/HEAD?recursive=1", ghAuth());
 
-  if (res.status === 403) {
-    throw new Error("GitHub is rate limiting this browser — try again in an hour");
-  }
+  if (res.status === 403 || res.status === 429) throw new RateLimited();
   if (!res.ok) throw new Error("could not read that repository");
 
   const data = await res.json();
@@ -985,14 +1451,20 @@ async function ghFetch(resource) {
   let res = await fetch(raw("README.md"));
   if (res.ok) return { text: await res.text(), name: "README.md", owner, repo };
 
-  // Not README.md — ask GitHub what it is actually called.
-  const meta = await fetch("https://api.github.com/repos/" + owner + "/" + repo + "/readme");
-  if (!meta.ok) throw new Error("no README in that repository");
-  const info = await meta.json();
+  /* Not README.md. The tree already names every file in the repository, so
+     the name is read from there rather than bought from /readme — one call
+     either way, and the tree is wanted the moment Code is opened anyway.
+     Only the root is considered: a readme inside a folder is that folder's,
+     not the repository's. */
+  const tree = await ghTree(owner, repo);
+  const found = (tree.entries || []).find(e =>
+    e.type === "blob" && e.path.indexOf("/") === -1 && /^readme(\.|$)/i.test(e.path));
 
-  res = await fetch(raw(info.name));
+  if (!found) throw new Error("no README in that repository");
+
+  res = await fetch(raw(found.path));
   if (!res.ok) throw new Error("no README in that repository");
-  return { text: await res.text(), name: info.name, owner, repo };
+  return { text: await res.text(), name: found.path, owner, repo };
 }
 
 /* ---------- master post parsing ---------- */
@@ -1379,6 +1851,21 @@ const MD_INLINE = new RegExp(
   "|\\*\\*([^*]+)\\*\\*|__([^_]+)__" +               // strong
   "|\\*([^*]+)\\*|_([^_]+)_", "g");                  // emphasis
 
+/* ---------- pure: urls ---------- */
+
+/* Every address that reaches an href or a src in rendered markdown passes
+   through here first, and anything whose scheme is not http, https or
+   mailto leaves as an empty string — which every caller treats as "render
+   the text, make no link". javascript: and data: die here.
+
+   The obvious way round it, hiding a scheme behind a tab or a newline for
+   the URL parser to strip back out, cannot reach this function: the
+   markdown pattern captures the address with [^)\s]+, so whitespace ends
+   the capture before a scheme can be reassembled.
+
+   Fenced because this is the one place a stranger's text becomes a link,
+   and an invariant that matters that much should be pinned by a test
+   rather than by a comment. See tests/site/urls.test.mjs. */
 function mdUrl(raw, base) {
   const value = String(raw == null ? "" : raw).trim();
   if (!value || value.startsWith("#")) return "";
@@ -1386,6 +1873,12 @@ function mdUrl(raw, base) {
   if (/^[a-z][a-z0-9+.\-]*:/i.test(value)) return "";
   try { return new URL(value, base).href; } catch (err) { return ""; }
 }
+
+/* ---------- end pure ---------- */
+
+/* Whether an image in markdown becomes an <img> or a link. See the note
+   where renderMarkdown sets it. */
+let mdImages = true;
 
 function mdInline(text, parent, base) {
   MD_INLINE.lastIndex = 0;
@@ -1398,10 +1891,21 @@ function mdInline(text, parent, base) {
 
     else if (m[3] != null) {
       const src = mdUrl(m[3], base);
-      if (src) {
+
+      if (src && !mdImages) {
+        /* Off for text the publisher did not write. On a public repository
+           anybody may open an issue, and an image in one is a request every
+           reader's browser would make to a host nobody here chose. The
+           address still reaches the reader, as a link they may follow. */
+        const a = el("a", null, m[2] || src);
+        a.href = src; a.target = "_blank"; a.rel = "noopener noreferrer nofollow";
+        parent.appendChild(a);
+
+      } else if (src) {
         const img = document.createElement("img");
         img.src = src; img.alt = m[2] || ""; img.loading = "lazy";
         parent.appendChild(img);
+
       } else parent.append(m[2] || "");
     }
 
@@ -1496,7 +2000,19 @@ function renderTable(header, aligns, rows, parent, base) {
   parent.appendChild(wrap);
 }
 
-function renderMarkdown(src, parent, base) {
+function renderMarkdown(src, parent, base, opts) {
+  /* Held for the duration of one call rather than threaded through six
+     call sites. Rendering is synchronous from here to the last node, so
+     two of these can never interleave. */
+  mdImages = !(opts && opts.images === false);
+  try {
+    renderMarkdownInner(src, parent, base);
+  } finally {
+    mdImages = true;
+  }
+}
+
+function renderMarkdownInner(src, parent, base) {
   const lines = String(src).replace(/\r\n?/g, "\n").split("\n");
   let i = 0;
 
@@ -1843,6 +2359,12 @@ function paint() {
 
 async function showArticle(path) {
   if (isTree(path)) return showTree(path);
+
+  // A section is its own pane. Overview is the bare repository route and
+  // keeps the ordinary article furniture, so it goes on to showGithub.
+  const part = ghSection(path);
+  if (part && part.section !== "overview") return showSection(path);
+
   if (isGh(path)) return showGithub(path);
   syncMeta();
   const view = $("view");
@@ -2019,6 +2541,535 @@ async function sharePage(title, btn) {
 /* A GitHub article, fetched at read time. Everything around it — the bar,
    the contents, the pager, the footer — is the same as a Telegraph one;
    only where the words came from differs. */
+/* ---------- the dashboard's chrome ---------- */
+
+/* Code is a tree route rather than a section, because it already was one
+   and its URL is github's own /tree/HEAD form. The rest hang off "@". */
+const RAIL = [
+  { key: "overview", name: "Overview",    at: "" },
+  { key: "code",     name: "Code",        at: null },
+  { key: "issues",   name: "Development", at: "issues" },
+  { key: "releases", name: "Releases",    at: "releases" },
+  { key: "pulse",    name: "Activity",    at: "pulse" }
+];
+
+function sectionRail(repo, active, counts) {
+  const nav = el("nav", "rail");
+  nav.setAttribute("aria-label", "Sections of this repository");
+
+  for (const item of RAIL) {
+    const id = item.key === "code" ? "ght:" + repo
+             : item.at ? "gh:" + repo + "@" + item.at
+             : "gh:" + repo;
+
+    const a = el("a", null, item.name);
+    a.href = link(master, id);
+
+    // "issue" is a single issue, which is still inside Development.
+    if (item.key === active || (item.key === "issues" && active === "issue")) {
+      a.setAttribute("aria-current", "page");
+    }
+
+    const n = counts && counts[item.key];
+    if (n) a.appendChild(el("sup", null, String(n)));
+
+    nav.appendChild(a);
+  }
+
+  return nav;
+}
+
+/* Updated, licence, stars, what is open, what is newest. The open count is
+   a live state and so may have the lamp; nothing else on this line may. */
+function healthStrip(meta, open, latest) {
+  const strip = el("div", "strip");
+
+  const add = (label, value, live) => {
+    if (value == null || value === "") return;
+    const span = el("span", live ? "live" : null);
+    if (label) span.append(label + " ");
+    span.appendChild(el("b", null, String(value)));
+    strip.appendChild(span);
+  };
+
+  add("Updated", ago(meta.pushed_at));
+  if (meta.license && meta.license.spdx_id && meta.license.spdx_id !== "NOASSERTION") {
+    add("", meta.license.spdx_id);
+  }
+  if (meta.stargazers_count) add("★", meta.stargazers_count);
+  if (meta.forks_count) add("Forks", meta.forks_count);
+  if (open) add("●", open + " open", true);
+  add("", latest);
+
+  return strip;
+}
+
+/* "2h ago" without a library, and without Intl.RelativeTimeFormat, whose
+   output varies by locale in ways this line has no room for. The site
+   formats its dates by hand elsewhere for the same sort of reason. */
+function ago(iso) {
+  const then = Date.parse(iso || "");
+  if (!then) return "";
+
+  const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
+  if (mins < 60) return mins + "m ago";
+  if (mins < 1440) return Math.round(mins / 60) + "h ago";
+  if (mins < 43200) return Math.round(mins / 1440) + "d ago";
+  return Math.round(mins / 43200) + "mo ago";
+}
+
+const rawBase = repo => "https://raw.githubusercontent.com/" + repo + "/HEAD/";
+
+/* Why one pane is empty, in that pane, leaving the rest of the dashboard
+   standing. Running out of budget is worth saying differently from GitHub
+   having nothing, because only the first has a remedy. */
+function paneError(err) {
+  if (!(err instanceof RateLimited)) {
+    return el("p", "empty", "GitHub did not answer for this section" +
+      (err && err.message ? " — " + err.message : "") + ".");
+  }
+
+  const wrap = document.createDocumentFragment();
+  wrap.appendChild(el("p", "empty",
+    "GitHub allows sixty requests an hour to a browser that has not " +
+    "identified itself, and this one has spent them. The readme still " +
+    "works — it never touches the API. A token raises the limit to five " +
+    "thousand."));
+  wrap.appendChild(tokenField());
+  return wrap;
+}
+
+/* The token is held for the life of the tab and sent to api.github.com and
+   nowhere else. It is still a credential in a browser, which is a real
+   exception to this site's one rule, so the box says what it is taking. */
+function tokenField() {
+  const wrap = el("div", "tokenbox");
+
+  const field = el("input", "find");
+  field.type = "password";
+  field.placeholder = "paste a GitHub token";
+  field.setAttribute("aria-label", "GitHub token");
+  field.autocomplete = "off";
+
+  const note = el("p", "active");
+  wrap.append(field, note);
+
+  field.addEventListener("input", () => {
+    const kind = ghTokenKind(field.value);
+
+    if (!kind) {
+      note.textContent = field.value ? "That is not the shape of a GitHub token." : "";
+      return;
+    }
+
+    try {
+      sessionStorage.setItem(KEEP + GH_TOKEN_KEY, field.value.trim());
+    } catch (err) {
+      note.textContent = "This browser will not keep it.";
+      return;
+    }
+
+    note.replaceChildren();
+
+    if (kind === "fine") {
+      note.append("Kept for this tab only.");
+    } else {
+      /* `gh auth token` hands out exactly this kind, and its default scopes
+         include write access to private repositories. Nothing here wants
+         that, and the paste is the last moment anyone can be told. */
+      note.appendChild(el("b", null, "This is a broad token."));
+      note.append(" It can write to your private repositories. A " +
+        "fine-grained one, public repositories, read-only, is the kind to " +
+        "use here.");
+    }
+
+    const again = el("button", "clear", "reload →");
+    again.type = "button";
+    again.addEventListener("click", () => location.reload());
+    note.appendChild(again);
+  });
+
+  return wrap;
+}
+
+/* A call that failed comes back as {error}, so every reader of the four
+   payloads goes through here and gets an empty list rather than a throw. */
+const okList = part => (part && !part.error && Array.isArray(part) ? part : []);
+const okMeta = part => (part && !part.error && !Array.isArray(part) ? part : {});
+
+/* The blocks answer "what is happening"; the rail beside them answers
+   "what is this". */
+function factsRail(meta, issues, pulls, releases, commits) {
+  const rail = el("aside", "facts");
+
+  const row = (label, value) => {
+    if (value == null || value === "") return;
+    const d = el("div");
+    d.append(el("span", null, label), el("b", null, String(value)));
+    rail.appendChild(d);
+  };
+
+  const latest = releases[0];
+  if (latest) {
+    row("Latest", latest.tag_name);
+    row("Released", fmtDate((latest.published_at || "").slice(0, 10)));
+  }
+
+  const open = issues.filter(i => i.state === "open");
+  const milestone = (open.find(i => i.milestone) || {}).milestone;
+  if (milestone) {
+    const done = milestone.closed_issues || 0;
+    const total = done + (milestone.open_issues || 0);
+    row("Milestone", milestone.title + (total ? " · " + done + "/" + total : ""));
+  }
+
+  const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString();
+  const recent = countSince(commits, monthAgo);
+  if (recent) row("Commits 30d", recent);
+
+  const who = deriveContributors(commits);
+  if (who.length) row("Recent hands", who.length);
+
+  row("Default", meta.default_branch);
+
+  const openPulls = pulls.filter(p => p.state === "open").length;
+  if (openPulls) row("Open PRs", openPulls);
+
+  if (meta.size) row("Size", Math.round(meta.size / 1024) + " MB");
+  if (meta.language) row("Language", meta.language);
+  if (meta.topics && meta.topics.length) row("Topics", meta.topics.slice(0, 4).join(" · "));
+
+  return rail;
+}
+
+function blockOf(title, href, rows) {
+  if (!rows.length) return null;
+
+  const wrap = document.createDocumentFragment();
+  const h = el("h3", null, title);
+  if (href) {
+    const more = el("a", null, "all →");
+    more.href = href;
+    h.appendChild(more);
+  }
+  wrap.appendChild(h);
+
+  const list = el("div", "rows");
+  for (const [id, text, tag] of rows.slice(0, 4)) {
+    const row = el("div", "row");
+    row.append(el("span", "n", id), el("span", "t", text));
+    if (tag) row.appendChild(el("span", "tag", tag));
+    list.appendChild(row);
+  }
+  wrap.appendChild(list);
+  return wrap;
+}
+
+/* Overview, appended into the article the ordinary repository page already
+   builds — so the back link, the title, the byline and the tags are the
+   ones every other page here has, rather than a second set. */
+function overview(art, repo, data) {
+  const meta = okMeta(data.meta);
+  const { issues, pulls } = splitIssues(okList(data.issues));
+  const releases = okList(data.releases);
+  const commits = okList(data.commits);
+
+  const open = issues.filter(i => i.state === "open");
+
+  art.appendChild(healthStrip(meta, open.length, (releases[0] || {}).tag_name));
+  art.appendChild(sectionRail(repo, "overview", {
+    issues: open.length,
+    releases: releases.length
+  }));
+
+  const dash = el("div", "dash");
+  const left = el("div");
+
+  const blocks = [
+    blockOf("In progress", link(master, "gh:" + repo + "@issues"),
+      open.map(i => ["#" + i.number, i.title, labelsOf(i)[0] || ""])),
+    blockOf("Recent", link(master, "gh:" + repo + "@pulse"),
+      mergeActivity({ commits }).map(e => [e.id, e.title, ""])),
+    blockOf("Releases", link(master, "gh:" + repo + "@releases"),
+      releases.map(r => [r.tag_name, r.name || r.tag_name, ""]))
+  ].filter(Boolean);
+
+  for (const b of blocks) left.appendChild(b);
+
+  // Nothing arrived at all: say which of the four failed rather than
+  // showing an empty frame that looks like an empty repository.
+  if (!blocks.length) {
+    const why = [data.meta, data.issues, data.releases, data.commits].find(p => p && p.error);
+    left.appendChild(why ? paneError(why.error)
+                         : el("p", "empty", "Nothing recorded here yet."));
+  }
+
+  dash.append(left, factsRail(meta, issues, pulls, releases, commits));
+  art.appendChild(dash);
+}
+
+/* ---------- Development ---------- */
+
+/* The facets and the field narrow the same set, so both read one filter
+   object and both are redrawn whenever either changes. Nothing here costs a
+   request: it is all slicing the payload already fetched. */
+function development(pane, repo, data) {
+  if (data.issues.error) {
+    pane.appendChild(paneError(data.issues.error));
+    return;
+  }
+
+  const { issues } = splitIssues(okList(data.issues));
+  const filter = { state: "open", labels: [], milestone: null, text: "" };
+
+  const dash = el("div", "dash");
+  const left = el("div");
+  const facets = el("aside", "facets");
+  dash.append(left, facets);
+
+  const field = el("input", "find");
+  field.type = "search";
+  field.placeholder = "filter";
+  field.setAttribute("aria-label", "Filter issues");
+
+  const said = el("p", "active");
+  const list = el("div", "rows");
+  left.append(field, said, list);
+
+  const draw = () => {
+    const shown = filterIssues(issues, filter);
+
+    list.replaceChildren();
+    for (const i of shown) {
+      const row = el("div", "row");
+      const title = el("span", "t");
+      const a = el("a", null, i.title);
+      a.href = link(master, "gh:" + repo + "@issues/" + i.number);
+      title.appendChild(a);
+
+      row.append(el("span", "n", "#" + i.number), title);
+
+      const label = labelsOf(i)[0];
+      if (label) row.appendChild(el("span", "tag", label));
+      row.appendChild(el("span", "when", ago(i.updated_at)));
+      list.appendChild(row);
+    }
+    if (!shown.length) list.appendChild(el("p", "empty", "Nothing matches that."));
+
+    /* One line saying what is showing. With two mechanisms narrowing one
+       list it is otherwise easy to lose track of why three things are left. */
+    const bits = [];
+    if (filter.state !== "all") bits.push(filter.state);
+    for (const l of filter.labels) bits.push("label:" + l);
+    if (filter.milestone) bits.push("milestone:" + filter.milestone);
+    if (filter.text) bits.push('"' + filter.text + '"');
+
+    said.replaceChildren();
+    said.append("Showing " + shown.length + " of " + issues.length +
+                (bits.length ? " — " + bits.join(" · ") : ""));
+
+    if (bits.length) {
+      const clear = el("button", "clear", "clear ×");
+      clear.type = "button";
+      clear.addEventListener("click", () => {
+        filter.state = "all"; filter.labels = []; filter.milestone = null;
+        filter.text = ""; field.value = ""; draw();
+      });
+      said.appendChild(clear);
+    }
+
+    drawFacets(facets, facetCounts(issues, filter), filter, draw);
+  };
+
+  field.addEventListener("input", () => { filter.text = field.value; draw(); });
+  draw();
+  pane.appendChild(dash);
+}
+
+/* A facet whose count falls to zero dims rather than disappearing, so the
+   rail keeps its shape and the reader can see what their typing excluded. */
+function drawFacets(host, counts, filter, redraw) {
+  host.replaceChildren();
+
+  const group = (title, entries, isOn, toggle) => {
+    if (!entries.length) return;
+    host.appendChild(el("h4", null, title));
+
+    for (const [name, n] of entries) {
+      const a = el("a", n === 0 ? "dim" : null);
+      a.href = "#";
+      a.append(el("span", null, name), el("span", null, String(n)));
+      if (isOn(name)) a.classList.add("on");
+      a.addEventListener("click", e => { e.preventDefault(); toggle(name); redraw(); });
+      host.appendChild(a);
+    }
+  };
+
+  group("State", Object.entries(counts.state),
+    name => filter.state === name,
+    name => { filter.state = name; });
+
+  group("Label", Object.entries(counts.labels),
+    name => filter.labels.includes(name),
+    name => {
+      const at = filter.labels.indexOf(name);
+      if (at < 0) filter.labels.push(name); else filter.labels.splice(at, 1);
+    });
+
+  group("Milestone", Object.entries(counts.milestones),
+    name => filter.milestone === name,
+    name => { filter.milestone = filter.milestone === name ? null : name; });
+}
+
+/* ---------- Releases, Activity, one issue ---------- */
+
+function releases(pane, repo, data) {
+  if (data.releases.error) { pane.appendChild(paneError(data.releases.error)); return; }
+
+  const list = okList(data.releases);
+  if (!list.length) { pane.appendChild(el("p", "empty", "No releases.")); return; }
+
+  for (const r of list) {
+    const h = el("h3", null, r.tag_name + (r.name && r.name !== r.tag_name ? " — " + r.name : ""));
+    h.appendChild(el("span", null, fmtDate((r.published_at || "").slice(0, 10))));
+    pane.appendChild(h);
+
+    // Release notes are written by hands that already have push access —
+    // the same trust the readme gets — so their images render.
+    if (r.body) {
+      const prose = el("div", "body");
+      renderMarkdown(r.body, prose, rawBase(repo));
+      pane.appendChild(prose);
+    }
+
+    for (const asset of (r.assets || [])) {
+      const row = el("div", "row");
+      const cell = el("span", "t");
+      const a = el("a", null, asset.name);
+      a.href = asset.browser_download_url;
+      a.rel = "noopener";
+      cell.appendChild(a);
+      row.append(el("span", "n", "↓"), cell,
+                 el("span", "tag", Math.round(asset.size / 1024) + " kB"));
+      pane.appendChild(row);
+    }
+  }
+}
+
+/* Four lists become one stream, because "what has been happening" is one
+   question and GitHub only answers it in four places. */
+function activity(pane, repo, data) {
+  const feed = mergeActivity({
+    commits: okList(data.commits),
+    issues: okList(data.issues),
+    releases: okList(data.releases)
+  });
+
+  if (!feed.length) {
+    const why = [data.commits, data.issues, data.releases].find(p => p && p.error);
+    pane.appendChild(why ? paneError(why.error) : el("p", "empty", "Nothing to show."));
+    return;
+  }
+
+  let day = null;
+  for (const e of feed) {
+    const on = e.when.slice(0, 10);
+    if (on !== day) { day = on; pane.appendChild(el("h3", null, fmtDate(on))); }
+
+    const row = el("div", "row");
+    const cell = el("span", "t");
+
+    if (e.kind === "issue" || e.kind === "pull") {
+      const a = el("a", null, e.title);
+      a.href = link(master, "gh:" + repo + "@issues/" + e.id.slice(1));
+      cell.appendChild(a);
+    } else {
+      cell.append(e.title);
+    }
+
+    row.append(el("span", "n", e.id), cell, el("span", "tag", e.kind));
+    pane.appendChild(row);
+  }
+}
+
+function oneIssue(pane, repo, number, data) {
+  if (data.issues.error) { pane.appendChild(paneError(data.issues.error)); return; }
+
+  const found = okList(data.issues).find(i => String(i.number) === String(number));
+
+  /* The list is the most recent hundred. An older issue is simply not in
+     hand, and saying so beats a fifth request or a spinner. */
+  if (!found) {
+    pane.appendChild(el("p", "empty",
+      "Issue #" + number + " is not among the hundred most recent."));
+    return;
+  }
+
+  pane.appendChild(el("h1", null, found.title));
+
+  const meta = el("div", "strip");
+  meta.appendChild(el("b", null, "#" + found.number));
+  meta.appendChild(el("span", found.state === "open" ? "live" : null, found.state));
+  meta.appendChild(el("span", null, fmtDate((found.created_at || "").slice(0, 10))));
+  for (const l of labelsOf(found)) meta.appendChild(el("span", null, l));
+  pane.appendChild(meta);
+
+  /* An issue body is the one thing here written by somebody the publisher
+     did not choose — on a public repository anybody may open one. Rendering
+     its images would let a stranger point every reader's browser at a host
+     of their choosing, so images become links the reader may follow. */
+  if (found.body) {
+    const prose = el("div", "body");
+    renderMarkdown(found.body, prose, "", { images: false });
+    pane.appendChild(prose);
+  }
+}
+
+/* Overview is the bare repository route and keeps the ordinary article
+   furniture, so it stays in showGithub. Everything behind an "@" is its own
+   pane and renders here. */
+async function showSection(resource) {
+  syncMeta();
+  const part = ghSection(resource);
+  const view = $("view");
+
+  view.replaceChildren(el("p", "loading", "fetching " + part.repo + "…"));
+
+  const data = await ghRepoData(part.repo);
+  const name = part.repo.split("/")[1];
+
+  const heading = { issues: "Development", issue: "Development",
+                    releases: "Releases", pulse: "Activity" }[part.section];
+  document.title = name + " · " + heading + " · " + masterPage.title;
+
+  view.replaceChildren();
+  view.appendChild(backLink("gh:" + part.repo));
+
+  const art = el("article", "article");
+  art.appendChild(el("h1", null, name));
+
+  const { issues } = splitIssues(okList(data.issues));
+  art.appendChild(healthStrip(
+    okMeta(data.meta),
+    issues.filter(i => i.state === "open").length,
+    (okList(data.releases)[0] || {}).tag_name
+  ));
+  art.appendChild(sectionRail(part.repo, part.section, {
+    issues: issues.filter(i => i.state === "open").length,
+    releases: okList(data.releases).length
+  }));
+
+  const pane = el("div", "pane");
+  if (part.section === "issues") development(pane, part.repo, data);
+  if (part.section === "issue") oneIssue(pane, part.repo, part.arg, data);
+  if (part.section === "releases") releases(pane, part.repo, data);
+  if (part.section === "pulse") activity(pane, part.repo, data);
+
+  art.appendChild(pane);
+  view.appendChild(art);
+  checkAlign();
+}
+
 async function showGithub(resource) {
   syncMeta();
   const view = $("view");
@@ -2095,9 +3146,11 @@ async function showGithub(resource) {
   }
 
   if (isRepo) {
-    repoCrumb(owner, repo, "", art);
-    const counts = await appendListing(art, owner, repo, "");
-    if (counts) art.appendChild(repoOrigin(owner, repo, "", counts));
+    /* Overview: what GitHub knows about the repository, with the README
+       beneath it. The file listing that used to lead this page is the Code
+       section now, one click along the rail. */
+    const data = await ghRepoData(owner + "/" + repo);
+    overview(art, owner + "/" + repo, data);
     art.appendChild(el("h2", "seclabel rule", failed ? "No readme" : "Readme"));
   } else {
     repoCrumb(owner, repo, doc.name.split("/").slice(0, -1).join("/"), art);
@@ -2572,6 +3625,12 @@ async function start(r) {
 }
 
 function show(r) {
+  /* A repository is the only thing here wider than the reading measure.
+     Set from the route, so leaving one puts the measure back. A tree is a
+     repository page too — it is the Code section. */
+  document.body.classList.toggle("wide",
+    !!ghSection(r.article) || isTree(r.article));
+
   if (r.article) showArticle(r.article); else showIndex();
 }
 

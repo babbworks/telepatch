@@ -1269,7 +1269,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/about - set your site's introduction\n"
         "/footer - set your site's footer\n"
         "/link - add a GitHub page to your index\n"
-        "/repo - add a GitHub repository, files and README\n"
+        "/repo - add a GitHub repository, as a dashboard\n"
         "/collections - list your collections\n"
         "/newsite - start another collection\n"
         "/unfile - take an entry out of a collection\n"
@@ -1568,7 +1568,8 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "A sentence for the index.</code>\n\n"
         "Line 1 the address, line 2 the title, line 3 categories if it "
         "reads like a list, anything after that the excerpt.\n\n"
-        "A GitHub repository means its README. A file link means that file."
+        "A GitHub repository opens as a dashboard — overview, code, issues, "
+        "releases and activity. A file link means that file."
         + carrier_link("link", token, site=path),
         parse_mode=ParseMode.HTML,
         disable_web_page_preview=True,
@@ -1811,7 +1812,7 @@ async def add_repo(message, token, path):
         message, token, path,
         f"https://github.com/{owner}/{repo}",
         title, categories, excerpt,
-        "its files and README, read live from GitHub",
+        "its overview, code, issues, releases and activity, read live from GitHub",
     )
 
 
@@ -3699,7 +3700,7 @@ async def register_commands(app):
         ("about", "Set the introduction on your site"),
         ("footer", "Set the footer on your site"),
         ("link", "Add a GitHub or outward entry to your index"),
-        ("repo", "Add a GitHub repository, files and README"),
+        ("repo", "Add a GitHub repository, as a dashboard"),
         ("collections", "List your collections"),
         ("newsite", "Start another collection on this identity"),
         ("unfile", "Take an entry out of a collection"),
