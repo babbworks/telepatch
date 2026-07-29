@@ -133,6 +133,17 @@ EDITOR_URL = SITE_URL.rstrip("/") + "/edit.html"
 # index entry, and the word itself is hidden when categories are displayed.
 NAV_CATEGORY = "nav"
 
+# An entry tagged with this leaves the index and joins the site's elsewhere
+# menu: other Telepatch collections, and anything else the publisher wants
+# readers to be able to reach. Added with /link like any other entry.
+#
+# Authored, never discovered. A reader cannot enumerate somebody's
+# collections - getPageList needs the token - so the only way one site can
+# point at another is for its publisher to say so.
+ELSEWHERE_CATEGORY = "elsewhere"
+
+RESERVED_CATEGORIES = (NAV_CATEGORY, ELSEWHERE_CATEGORY)
+
 # Ceiling on how many pages /site will read, to bound the rebuild.
 INDEX_LIMIT = 200
 
@@ -3416,7 +3427,7 @@ async def rebuild_site(message, token, master_path=None, title=None,
 
     tags = sorted({
         c for e in entries for c in e["categories"]
-        if c.lower() != NAV_CATEGORY
+        if c.lower() not in RESERVED_CATEGORIES
     })
 
     await notice.delete()

@@ -134,6 +134,27 @@ Telegraph has no `deletePage`, so a stray index would be permanent.
 
 A page tagged `nav` becomes a top-bar link instead of an index entry.
 
+### Pointing at other sites
+
+An entry tagged `elsewhere` leaves the index and joins the globe menu at
+the right of the top bar — other Telepatch collections, and anything else
+worth reaching from here. Add one with `/link`:
+
+```
+https://babbworks.github.io/telepatch/#Another-Site-07-29
+The other publication
+elsewhere
+```
+
+The site recognises its own address, so a link to another Telepatch
+publication changes the route rather than leaving the page; everything
+else opens outward in a new tab.
+
+These links are **authored, never discovered.** A reader cannot enumerate
+somebody's collections — `getPageList` needs the token — so the only way
+one site can point at another is for its publisher to say so. That is the
+same property that makes publishing an index a deliberate act.
+
 ### Entries that are not Telegraph pages
 
 An index entry may point at GitHub. A repository link means "the README is
