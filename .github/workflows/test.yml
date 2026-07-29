@@ -39,8 +39,10 @@ jobs:
       # The pure half of that script — routing, filtering, the derivations —
       # is fenced by banner comments and evaluated on its own, so it can be
       # tested without a browser. tests/site/extract.mjs does the slicing.
+      # The files are named rather than the directory: node 22 tries to load
+      # a bare directory argument as a module, where node 20 walked it.
       - name: the site's pure functions
-        run: node --test tests/site/
+        run: node --test tests/site/*.test.mjs
 
       - name: no secrets in the tree
         run: |
