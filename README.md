@@ -28,9 +28,11 @@ not a limitation worked around; it is the reason there is nothing to leak.
 
 The website inherits the same property. It is one HTML file that fetches one
 public Telegraph page. No account, no cookies, no analytics, and no
-third-party requests at all — system fonts only, and `api.telegra.ph` is the
-only host it calls. Opening a code file also loads `hljs.min.js`, which is
-served from this site, not a CDN.
+third-party requests at all — system fonts only. A publication of Telegraph
+articles calls `api.telegra.ph` and nothing else; a repository entry also
+calls `api.github.com` and `raw.githubusercontent.com`, which is what
+reading a repository live means. Opening a code file additionally loads
+`hljs.min.js`, which is served from this site, not a CDN.
 
 ### What it does not protect you from
 
@@ -162,8 +164,8 @@ same property that makes publishing an index a deliberate act.
 
 ### Entries that are not Telegraph pages
 
-An index entry may point at GitHub. A repository link means "the README is
-the content"; a file link means that file. It is fetched when a reader opens
+An index entry may point at GitHub. A repository link opens that
+repository; a file link means that file. It is fetched when a reader opens
 it, so the article is whatever the repository says today rather than a copy
 taken once — the one thing a Telegraph article cannot be.
 
@@ -176,14 +178,76 @@ https://github.com/babbworks/telepatch
 the title and description come from GitHub; add more lines to write them
 yourself.
 
-A repository's page leads with its contents and carries the README
-underneath — what is in here, then what it says. Folders open in place and
-files open as their own pages, so the repository is readable without leaving
-the site. One request to GitHub's tree API returns the whole structure —
-even CPython's 6,435 entries come back untruncated — and it is cached, so
-every folder after the first costs nothing at all. File contents come from
-`raw.githubusercontent.com`, which allows cross-origin reads and is not rate
-limited.
+A repository opens as a dashboard. Five sections sit behind a rail, and
+each is addressed the way GitHub addresses it — put `https://` in front of
+the second half and you have the same page at the source:
+
+```
+…/#<master-path>/github.com/babbworks/telepatch
+…/#<master-path>/github.com/babbworks/telepatch/tree/HEAD/docs
+…/#<master-path>/github.com/babbworks/telepatch/issues
+…/#<master-path>/github.com/babbworks/telepatch/issues/144
+…/#<master-path>/github.com/babbworks/telepatch/releases
+…/#<master-path>/github.com/babbworks/telepatch/pulse
+```
+
+**Overview** carries what GitHub knows — when it was last touched, its
+licence, stars, what is open, what was released, how many commits in
+thirty days — with the README beneath it. **Code** is the file tree.
+**Development** is every issue and pull request. **Releases** carries the
+notes and the assets. **Activity** merges commits, issues, pull requests
+and releases into one chronological stream, because "what has been
+happening" is one question that GitHub answers in four places.
+
+There is deliberately no Readme section: GitHub has no `/readme` address to
+mirror, so the README sits under Overview, where GitHub puts it too.
+
+In Development the facets and the filter field narrow the same set, and
+neither costs a request — they are slices of one payload already fetched.
+A facet whose count falls to zero dims rather than disappearing, so the
+rail holds its shape and you can see what you excluded. `is:` and `label:`
+are understood if you type them and never required.
+
+Folders open in place and files open as their own pages, so the repository
+is readable without leaving the site. One request to GitHub's tree API
+returns the whole structure — even CPython's 6,435 entries come back
+untruncated — and it is cached, so every folder after the first costs
+nothing at all. File contents come from `raw.githubusercontent.com`, which
+allows cross-origin reads and is not rate limited.
+
+### What a repository costs, and the token
+
+Arriving at a repository spends **four** calls on `api.github.com`: the
+repository, its issues, its releases and its commits. The file tree is a
+fifth, spent only when Code is opened. Everything else — the README, every
+file — comes from `raw.githubusercontent.com`, which is not metered.
+
+That API allows **60 requests an hour to a browser that has not identified
+itself**, which is about a dozen repository views. Past that, each section
+says so and offers a box to paste a GitHub token, which raises the limit to
+5,000. The token is kept for the life of the tab, sent to `api.github.com`
+and nowhere else, and never written anywhere durable.
+
+It is still a credential in a browser — the second exception this project
+makes, after the extension. Use a **fine-grained token, public
+repositories, read-only**. Not what `gh auth token` hands you: that one can
+write to your private repositories, and the box says so when it recognises
+the shape.
+
+A reader who has run out still gets the README, because that never touches
+the API at all.
+
+### What a stranger may put on your page
+
+On a public repository anybody can open an issue, which makes an issue body
+the one thing here the publisher did not choose. Rendering its images would
+let a stranger point every reader's browser at a host nobody here picked,
+so **images in issue and pull-request bodies become links** — the address
+still reaches the reader, as something they may follow rather than
+something their browser fetches for them.
+
+Release notes keep their images. Those are written by hands that already
+have push access, which is the trust the README already gets.
 
 Markdown files render as prose. Anything else is shown as code, highlighted
 by [highlight.js](https://highlightjs.org) 11.11.1 (BSD-3-Clause), vendored
@@ -195,9 +259,6 @@ span-and-text whitelist rather than assigned as HTML. If the script does not
 arrive, a small lexer written for this project takes over: comments,
 strings, numbers and keywords. Images are displayed; other binaries and
 anything over 400 kB are linked to rather than pulled in.
-
-The tree API is the only rate-limited call in any of this — 60 an hour, per
-reader.
 
 `/site` reads these back before rewriting the list, so a hand-added entry
 survives a rebuild and keeps its place by date.
@@ -263,7 +324,15 @@ in front of the second half and you have the page at the source:
 …/#<master-path>/github.com/babbworks/telepatch
 …/#<master-path>/github.com/babbworks/telepatch/tree/HEAD/docs
 …/#<master-path>/github.com/babbworks/telepatch/blob/HEAD/bot.py
+…/#<master-path>/github.com/babbworks/telepatch/issues
+…/#<master-path>/github.com/babbworks/telepatch/releases
+…/#<master-path>/github.com/babbworks/telepatch/pulse
 ```
+
+A section carries no git ref, unlike `blob` and `tree`, so nothing is
+skipped in `issues/144`: the number is the section's argument rather than a
+path under a ref. Any other GitHub path — `/settings`, `/actions`,
+`/wiki` — resolves to the repository rather than a dead page.
 
 Separators are real `/` characters rather than escapes. An earlier version
 packed the resource into one segment with the slashes percent-encoded, which

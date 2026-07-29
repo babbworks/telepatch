@@ -609,6 +609,10 @@ body.wide{--col:68rem}
   background:none;border:0;padding:0;cursor:pointer;
   font:inherit;color:var(--lamp);margin-left:auto;
 }
+.tokenbox{max-width:34rem;margin-top:1.2rem}
+.tokenbox .active{display:block;text-transform:none;letter-spacing:0;line-height:1.5}
+.tokenbox .active b{color:var(--lamp);font-weight:400}
+.tokenbox .clear{margin-left:.5rem}
 .facets h4{
   font-family:var(--mono);font-size:.62rem;font-weight:400;
   text-transform:uppercase;letter-spacing:.09em;
@@ -1447,14 +1451,20 @@ async function ghFetch(resource) {
   let res = await fetch(raw("README.md"));
   if (res.ok) return { text: await res.text(), name: "README.md", owner, repo };
 
-  // Not README.md — ask GitHub what it is actually called.
-  const meta = await fetch("https://api.github.com/repos/" + owner + "/" + repo + "/readme");
-  if (!meta.ok) throw new Error("no README in that repository");
-  const info = await meta.json();
+  /* Not README.md. The tree already names every file in the repository, so
+     the name is read from there rather than bought from /readme — one call
+     either way, and the tree is wanted the moment Code is opened anyway.
+     Only the root is considered: a readme inside a folder is that folder's,
+     not the repository's. */
+  const tree = await ghTree(owner, repo);
+  const found = (tree.entries || []).find(e =>
+    e.type === "blob" && e.path.indexOf("/") === -1 && /^readme(\.|$)/i.test(e.path));
 
-  res = await fetch(raw(info.name));
+  if (!found) throw new Error("no README in that repository");
+
+  res = await fetch(raw(found.path));
   if (!res.ok) throw new Error("no README in that repository");
-  return { text: await res.text(), name: info.name, owner, repo };
+  return { text: await res.text(), name: found.path, owner, repo };
 }
 
 /* ---------- master post parsing ---------- */
@@ -2597,17 +2607,72 @@ const rawBase = repo => "https://raw.githubusercontent.com/" + repo + "/HEAD/";
    standing. Running out of budget is worth saying differently from GitHub
    having nothing, because only the first has a remedy. */
 function paneError(err) {
-  const p = el("p", "empty");
-
-  if (err instanceof RateLimited) {
-    p.textContent = "GitHub is rate limiting this browser. The readme still " +
-      "works — it does not touch the API — and a token raises the limit.";
-  } else {
-    p.textContent = "GitHub did not answer for this section" +
-      (err && err.message ? " — " + err.message : "") + ".";
+  if (!(err instanceof RateLimited)) {
+    return el("p", "empty", "GitHub did not answer for this section" +
+      (err && err.message ? " — " + err.message : "") + ".");
   }
 
-  return p;
+  const wrap = document.createDocumentFragment();
+  wrap.appendChild(el("p", "empty",
+    "GitHub allows sixty requests an hour to a browser that has not " +
+    "identified itself, and this one has spent them. The readme still " +
+    "works — it never touches the API. A token raises the limit to five " +
+    "thousand."));
+  wrap.appendChild(tokenField());
+  return wrap;
+}
+
+/* The token is held for the life of the tab and sent to api.github.com and
+   nowhere else. It is still a credential in a browser, which is a real
+   exception to this site's one rule, so the box says what it is taking. */
+function tokenField() {
+  const wrap = el("div", "tokenbox");
+
+  const field = el("input", "find");
+  field.type = "password";
+  field.placeholder = "paste a GitHub token";
+  field.setAttribute("aria-label", "GitHub token");
+  field.autocomplete = "off";
+
+  const note = el("p", "active");
+  wrap.append(field, note);
+
+  field.addEventListener("input", () => {
+    const kind = ghTokenKind(field.value);
+
+    if (!kind) {
+      note.textContent = field.value ? "That is not the shape of a GitHub token." : "";
+      return;
+    }
+
+    try {
+      sessionStorage.setItem(KEEP + GH_TOKEN_KEY, field.value.trim());
+    } catch (err) {
+      note.textContent = "This browser will not keep it.";
+      return;
+    }
+
+    note.replaceChildren();
+
+    if (kind === "fine") {
+      note.append("Kept for this tab only.");
+    } else {
+      /* `gh auth token` hands out exactly this kind, and its default scopes
+         include write access to private repositories. Nothing here wants
+         that, and the paste is the last moment anyone can be told. */
+      note.appendChild(el("b", null, "This is a broad token."));
+      note.append(" It can write to your private repositories. A " +
+        "fine-grained one, public repositories, read-only, is the kind to " +
+        "use here.");
+    }
+
+    const again = el("button", "clear", "reload →");
+    again.type = "button";
+    again.addEventListener("click", () => location.reload());
+    note.appendChild(again);
+  });
+
+  return wrap;
 }
 
 /* A call that failed comes back as {error}, so every reader of the four
