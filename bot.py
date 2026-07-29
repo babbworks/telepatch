@@ -2737,10 +2737,14 @@ ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # " — 2026-07-28 · 6 min · tin, industry", written by build_index. Every
 # part after the date is optional, because /link entries claim no reading
 # time and not everything is categorised.
+# As lenient as the website, which has always accepted a dot, a bullet, a
+# comma or nothing at all. The bot used to insist on the dot, so an index
+# written by hand with commas read back with no date - and /site re-dated
+# every entry to today. The separator is punctuation, not syntax.
 ENTRY_META = re.compile(
     r"(\d{4}-\d{2}-\d{2})"
-    r"(?:\s*·\s*(\d+)\s*min)?"
-    r"(?:\s*·\s*(.+?))?\s*$"
+    r"(?:\s*[·•,]?\s*(\d+)\s*min)?"
+    r"(?:\s*[·•,]?\s*(.+?))?\s*$"
 )
 
 
