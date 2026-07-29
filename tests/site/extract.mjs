@@ -9,7 +9,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import vm from "node:vm";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -33,12 +32,12 @@ export function loadPure() {
     .map(m => m[1]);
   if (!names.length) throw new Error("pure region defines nothing");
 
-  // The script's completion value is its last expression, so the bindings
-  // come back without assigning to a global — which strict mode would
-  // refuse anyway, and which would put test scaffolding in the context.
-  return vm.runInContext(
-    '"use strict";\n' + source + "\n;({" + names.join(",") + "});",
-    vm.createContext({}),
-    { filename: "index.html#pure" }
-  );
+  /* A function body rather than a vm context, deliberately. A vm gets its
+     own Array and Object, so anything the region returns fails a strict
+     deep-equal against a value built in the test — same shape, different
+     prototype. This runs in the one realm, and isolation is not lost: the
+     region names no global, and one that did would throw here exactly as
+     it would in a browser. */
+  return new Function('"use strict";\n' + source +
+    "\nreturn {" + names.join(",") + "};")();
 }

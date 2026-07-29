@@ -697,6 +697,12 @@ const isGh = path => typeof path === "string" && path.startsWith("gh:");
 const isTree = path => typeof path === "string" && path.startsWith("ght:");
 const isResource = path => isGh(path) || isTree(path);
 
+/* The sections of a repository, spelled the way github.com spells them, so
+   that putting "https://" in front of any of these routes lands on the same
+   thing at the source. There is deliberately no "readme": github has no such
+   path, and the README lives beneath Overview as it does there. */
+const GH_SECTIONS = ["issues", "releases", "pulse"];
+
 // URL segments (after the master) -> internal resource id, else null.
 function ghFromParts(parts) {
   // Links written before this change arrive either whole or, if something
@@ -707,12 +713,28 @@ function ghFromParts(parts) {
 
   if (first !== GH_HOST || parts.length < 3) return null;
   const owner = parts[1], repo = parts[2];
-  const kind = parts[3];                  // "blob", "tree", or nothing
-  const rest = parts.slice(5).join("/");  // parts[4] is the git ref
+  const base = "gh:" + owner + "/" + repo;
+  const kind = parts[3];                  // "blob", "tree", a section, or nothing
 
-  if (kind === "tree") return "ght:" + owner + "/" + repo + (rest ? "/" + rest : "");
-  if (kind === "blob" && rest) return "gh:" + owner + "/" + repo + "/" + rest;
-  return "gh:" + owner + "/" + repo;      // bare repository: the README
+  if (kind === "tree") {
+    const rest = parts.slice(5).join("/"); // parts[4] is the git ref
+    return "ght:" + owner + "/" + repo + (rest ? "/" + rest : "");
+  }
+  if (kind === "blob") {
+    const rest = parts.slice(5).join("/");
+    return rest ? base + "/" + rest : base;
+  }
+
+  // A section carries no git ref, so nothing is skipped here: in
+  // "issues/144" the 144 is the section's argument, not a path under a ref.
+  if (GH_SECTIONS.includes(kind)) {
+    const arg = parts[4];
+    return base + "@" + kind + (arg ? "/" + arg : "");
+  }
+
+  // Any other github path — /settings, /actions, /wiki — is not something
+  // this site renders. Landing on the repository beats a dead page.
+  return base;
 }
 
 /* Internal resource id -> URL segments. The ref is spelled out as HEAD so
@@ -723,9 +745,33 @@ function ghToParts(resource) {
     const [owner, repo, ...rest] = resource.slice(4).split("/");
     return [GH_HOST, owner, repo, "tree", "HEAD", ...rest];
   }
+
+  const at = resource.indexOf("@");
+  if (at >= 0) {
+    const [owner, repo] = resource.slice(3, at).split("/");
+    return [GH_HOST, owner, repo, ...resource.slice(at + 1).split("/")];
+  }
+
   const [owner, repo, ...rest] = resource.slice(3).split("/");
   return rest.length ? [GH_HOST, owner, repo, "blob", "HEAD", ...rest]
                      : [GH_HOST, owner, repo];
+}
+
+/* A resource id -> which repository, which section, and its argument.
+   Returns null for anything that is not a repository page: a file or a
+   directory is content, not a section of the dashboard. */
+function ghSection(resource) {
+  if (!isGh(resource)) return null;
+
+  const at = resource.indexOf("@");
+  const head = at < 0 ? resource.slice(3) : resource.slice(3, at);
+  if (head.split("/").length !== 2) return null;   // a path to a file
+
+  if (at < 0) return { repo: head, section: "overview", arg: null };
+
+  const [name, arg = null] = resource.slice(at + 1).split("/");
+  const section = name === "issues" && arg ? "issue" : name;
+  return { repo: head, section, arg };
 }
 
 /* ---------- end pure ---------- */
