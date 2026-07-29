@@ -550,6 +550,43 @@ body.wide{--col:68rem}
 .dash{display:grid;grid-template-columns:1fr 15rem;gap:1.6rem;align-items:start}
 @media (max-width:48rem){ .dash{grid-template-columns:1fr;gap:1rem} }
 
+.facts div{
+  display:flex;justify-content:space-between;gap:.75rem;
+  font-family:var(--mono);font-size:.66rem;
+  text-transform:uppercase;letter-spacing:.05em;
+  color:var(--graphite);
+  padding-block:.25rem;border-bottom:1px solid var(--hair);
+}
+.facts div b{font-weight:400;color:var(--ink);text-align:right}
+.facts div:last-child{border-bottom:0}
+
+.dash h3,.pane h3{
+  font-family:var(--mono);font-size:.65rem;font-weight:400;
+  text-transform:uppercase;letter-spacing:.09em;
+  color:var(--graphite);
+  display:flex;margin:1.1rem 0 .35rem;
+}
+.dash h3:first-child,.pane h3:first-child{margin-top:0}
+.dash h3 a,.pane h3 a{margin-left:auto;text-decoration:none}
+
+.rows .row{
+  display:flex;gap:.55rem;align-items:baseline;
+  padding-block:.3rem;border-bottom:1px solid var(--hair);
+}
+.rows .row:last-child{border-bottom:0}
+.row .n{
+  font-family:var(--mono);font-size:.7rem;color:var(--graphite);
+  flex:none;min-width:3.2rem;
+}
+.row .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .t a{text-decoration:none}
+.row .tag{
+  font-family:var(--mono);font-size:.6rem;flex:none;
+  text-transform:uppercase;letter-spacing:.06em;color:var(--graphite);
+  border:1px solid var(--hair);border-radius:2px;padding-inline:.25rem;
+}
+.row .when{font-family:var(--mono);font-size:.62rem;color:var(--graphite);flex:none}
+
 /* ---- repository listing ---- */
 .crumb{
   font-family:var(--mono);font-size:.7rem;
@@ -2469,6 +2506,141 @@ function ago(iso) {
   return Math.round(mins / 43200) + "mo ago";
 }
 
+const rawBase = repo => "https://raw.githubusercontent.com/" + repo + "/HEAD/";
+
+/* Why one pane is empty, in that pane, leaving the rest of the dashboard
+   standing. Running out of budget is worth saying differently from GitHub
+   having nothing, because only the first has a remedy. */
+function paneError(err) {
+  const p = el("p", "empty");
+
+  if (err instanceof RateLimited) {
+    p.textContent = "GitHub is rate limiting this browser. The readme still " +
+      "works — it does not touch the API — and a token raises the limit.";
+  } else {
+    p.textContent = "GitHub did not answer for this section" +
+      (err && err.message ? " — " + err.message : "") + ".";
+  }
+
+  return p;
+}
+
+/* A call that failed comes back as {error}, so every reader of the four
+   payloads goes through here and gets an empty list rather than a throw. */
+const okList = part => (part && !part.error && Array.isArray(part) ? part : []);
+const okMeta = part => (part && !part.error && !Array.isArray(part) ? part : {});
+
+/* The blocks answer "what is happening"; the rail beside them answers
+   "what is this". */
+function factsRail(meta, issues, pulls, releases, commits) {
+  const rail = el("aside", "facts");
+
+  const row = (label, value) => {
+    if (value == null || value === "") return;
+    const d = el("div");
+    d.append(el("span", null, label), el("b", null, String(value)));
+    rail.appendChild(d);
+  };
+
+  const latest = releases[0];
+  if (latest) {
+    row("Latest", latest.tag_name);
+    row("Released", fmtDate((latest.published_at || "").slice(0, 10)));
+  }
+
+  const open = issues.filter(i => i.state === "open");
+  const milestone = (open.find(i => i.milestone) || {}).milestone;
+  if (milestone) {
+    const done = milestone.closed_issues || 0;
+    const total = done + (milestone.open_issues || 0);
+    row("Milestone", milestone.title + (total ? " · " + done + "/" + total : ""));
+  }
+
+  const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString();
+  const recent = countSince(commits, monthAgo);
+  if (recent) row("Commits 30d", recent);
+
+  const who = deriveContributors(commits);
+  if (who.length) row("Recent hands", who.length);
+
+  row("Default", meta.default_branch);
+
+  const openPulls = pulls.filter(p => p.state === "open").length;
+  if (openPulls) row("Open PRs", openPulls);
+
+  if (meta.size) row("Size", Math.round(meta.size / 1024) + " MB");
+  if (meta.language) row("Language", meta.language);
+  if (meta.topics && meta.topics.length) row("Topics", meta.topics.slice(0, 4).join(" · "));
+
+  return rail;
+}
+
+function blockOf(title, href, rows) {
+  if (!rows.length) return null;
+
+  const wrap = document.createDocumentFragment();
+  const h = el("h3", null, title);
+  if (href) {
+    const more = el("a", null, "all →");
+    more.href = href;
+    h.appendChild(more);
+  }
+  wrap.appendChild(h);
+
+  const list = el("div", "rows");
+  for (const [id, text, tag] of rows.slice(0, 4)) {
+    const row = el("div", "row");
+    row.append(el("span", "n", id), el("span", "t", text));
+    if (tag) row.appendChild(el("span", "tag", tag));
+    list.appendChild(row);
+  }
+  wrap.appendChild(list);
+  return wrap;
+}
+
+/* Overview, appended into the article the ordinary repository page already
+   builds — so the back link, the title, the byline and the tags are the
+   ones every other page here has, rather than a second set. */
+function overview(art, repo, data) {
+  const meta = okMeta(data.meta);
+  const { issues, pulls } = splitIssues(okList(data.issues));
+  const releases = okList(data.releases);
+  const commits = okList(data.commits);
+
+  const open = issues.filter(i => i.state === "open");
+
+  art.appendChild(healthStrip(meta, open.length, (releases[0] || {}).tag_name));
+  art.appendChild(sectionRail(repo, "overview", {
+    issues: open.length,
+    releases: releases.length
+  }));
+
+  const dash = el("div", "dash");
+  const left = el("div");
+
+  const blocks = [
+    blockOf("In progress", link(master, "gh:" + repo + "@issues"),
+      open.map(i => ["#" + i.number, i.title, labelsOf(i)[0] || ""])),
+    blockOf("Recent", link(master, "gh:" + repo + "@pulse"),
+      mergeActivity({ commits }).map(e => [e.id, e.title, ""])),
+    blockOf("Releases", link(master, "gh:" + repo + "@releases"),
+      releases.map(r => [r.tag_name, r.name || r.tag_name, ""]))
+  ].filter(Boolean);
+
+  for (const b of blocks) left.appendChild(b);
+
+  // Nothing arrived at all: say which of the four failed rather than
+  // showing an empty frame that looks like an empty repository.
+  if (!blocks.length) {
+    const why = [data.meta, data.issues, data.releases, data.commits].find(p => p && p.error);
+    left.appendChild(why ? paneError(why.error)
+                         : el("p", "empty", "Nothing recorded here yet."));
+  }
+
+  dash.append(left, factsRail(meta, issues, pulls, releases, commits));
+  art.appendChild(dash);
+}
+
 async function showGithub(resource) {
   syncMeta();
   const view = $("view");
@@ -2545,9 +2717,11 @@ async function showGithub(resource) {
   }
 
   if (isRepo) {
-    repoCrumb(owner, repo, "", art);
-    const counts = await appendListing(art, owner, repo, "");
-    if (counts) art.appendChild(repoOrigin(owner, repo, "", counts));
+    /* Overview: what GitHub knows about the repository, with the README
+       beneath it. The file listing that used to lead this page is the Code
+       section now, one click along the rail. */
+    const data = await ghRepoData(owner + "/" + repo);
+    overview(art, owner + "/" + repo, data);
     art.appendChild(el("h2", "seclabel rule", failed ? "No readme" : "Readme"));
   } else {
     repoCrumb(owner, repo, doc.name.split("/").slice(0, -1).join("/"), art);
