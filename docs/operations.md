@@ -131,6 +131,38 @@ manager.
 
 ---
 
+## Open, and not blocking
+
+**The bot is operating.** It runs under systemd, restarts itself, has a
+watchdog proving it is still polling, and every finding in
+[performance.md](performance.md) is closed. Nothing below stops it working
+today — each is a thing that would matter later, or on a machine nobody is
+sitting at.
+
+Kept here so they are not carried around in somebody's head.
+
+| | What | When it starts mattering |
+|---|---|---|
+| 1 | **`OPERATOR_CHAT` unset** — unhandled errors go to the journal and nowhere else | The day nobody is reading the journal |
+| 2 | **`HEARTBEAT_URL` unset** — no dead man's switch | Same day. A bot with no inbound port cannot be checked from outside; silence has to be the alarm |
+| 3 | **No staging bot** — changes are tried against the live one | Before the next change that touches a write path |
+| 4 | **The VM** — [server-setup.md](server-setup.md) is written and waiting | When this laptop needs to close its lid |
+| 5 | **Custom domain** — deferred deliberately | It gates the website's CSP, which needs headers GitHub Pages cannot set |
+| 6 | **Extension not published** — unpacked only | Only if it becomes something other people install |
+
+Items 1 and 2 are ten minutes together and are the two that convert "it is
+running" into "I would know if it stopped". They are worth doing on the
+same day as item 4, and not really before it: on a machine you are sitting
+at, the journal *is* the alarm.
+
+**Item 3 is the one I would rank higher than the rest**, and only because
+of the property this whole document opens with: writes here cannot be
+undone. A second BotFather token costs nothing, since the bot stores
+nothing. That is a judgement, not a blocker — it is recorded and it is
+your call.
+
+---
+
 ## Deliberately not done
 
 - **Splitting `bot.py`.** It is ~3,400 lines and that will eventually
@@ -146,3 +178,6 @@ manager.
 
 - **2026-07-28** — plan written; Phases 0–2 and 4–6 built, Phase 3 ready
   to migrate.
+- **2026-07-28** — running under systemd as a user unit, watchdog verified
+  against a real 180-second window. Every performance finding closed. Six
+  items left open above, none of them blocking.
