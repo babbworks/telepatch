@@ -919,6 +919,69 @@ function facetCounts(issues, filter) {
   };
 }
 
+/* One chronological stream instead of four lists. A commit, an issue, a
+   pull request and a release are the same kind of event to somebody asking
+   what has been happening here lately. */
+function mergeActivity(sources) {
+  const s = sources || {};
+  const out = [];
+
+  for (const c of listOf(s.commits)) {
+    const info = c.commit || {};
+    out.push({
+      kind: "commit",
+      id: String(c.sha || "").slice(0, 7),
+      title: String(info.message || "").split("\n")[0],
+      when: (info.author || {}).date || ""
+    });
+  }
+
+  for (const i of listOf(s.issues)) {
+    out.push({
+      kind: i.pull_request ? "pull" : "issue",
+      id: "#" + i.number,
+      title: i.title || "",
+      when: i.created_at || ""
+    });
+  }
+
+  for (const r of listOf(s.releases)) {
+    out.push({
+      kind: "release",
+      id: r.tag_name || "",
+      title: r.name || r.tag_name || "",
+      when: r.published_at || r.created_at || ""
+    });
+  }
+
+  // ISO 8601 in UTC sorts correctly as text, which is why no date is parsed
+  // here. One without a date is dropped rather than sorted arbitrarily.
+  return out.filter(e => e.when).sort((a, b) => (a.when < b.when ? 1 : -1));
+}
+
+/* /contributors would be a fifth call for one line of the facts rail. The
+   authors of the commits already in hand answer the question well enough,
+   and the rail says "recent" so the number is not claimed to be more. */
+function deriveContributors(commits) {
+  const tally = new Map();
+
+  for (const c of listOf(commits)) {
+    const name = ((c.commit || {}).author || {}).name;
+    if (name) tally.set(name, (tally.get(name) || 0) + 1);
+  }
+
+  return [...tally.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
+function countSince(commits, iso) {
+  return listOf(commits).filter(c => {
+    const when = ((c.commit || {}).author || {}).date;
+    return when && when >= iso;
+  }).length;
+}
+
 /* ---------- end pure ---------- */
 
 function route() {
