@@ -12,3 +12,6 @@ venv/
 # Editors and OS
 .DS_Store
 *.swp
+
+# Brainstorming companion scratch
+.superpowers/
