@@ -136,15 +136,20 @@ A page tagged `nav` becomes a top-bar link instead of an index entry.
 
 ### Pointing at other sites
 
-An entry tagged `elsewhere` leaves the index and joins the globe menu at
-the right of the top bar — other Telepatch collections, and anything else
-worth reaching from here. Add one with `/link`:
+An entry tagged **`site`** or **`web`** leaves the index and joins the
+menu behind the globe at the right of the top bar — `site` for another
+Telepatch publication, `web` for anywhere else worth reaching. Add one
+with `/link`:
 
 ```
 https://babbworks.github.io/telepatch/#Another-Site-07-29
 The other publication
-elsewhere
+site
 ```
+
+The globe is always in the bar. It is dim and inert, with the divider
+beside it barely visible, until a publication actually points somewhere —
+so the bar says whether the menu is worth opening before it is opened.
 
 The site recognises its own address, so a link to another Telepatch
 publication changes the route rather than leaving the page; everything

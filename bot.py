@@ -133,16 +133,18 @@ EDITOR_URL = SITE_URL.rstrip("/") + "/edit.html"
 # index entry, and the word itself is hidden when categories are displayed.
 NAV_CATEGORY = "nav"
 
-# An entry tagged with this leaves the index and joins the site's elsewhere
-# menu: other Telepatch collections, and anything else the publisher wants
-# readers to be able to reach. Added with /link like any other entry.
+# Two more reserved words. An entry tagged with either leaves the index and
+# joins the menu behind the globe at the right of the bar: "site" for
+# another Telepatch collection, "web" for anywhere else worth reaching.
+# Added with /link like any other entry.
 #
 # Authored, never discovered. A reader cannot enumerate somebody's
 # collections - getPageList needs the token - so the only way one site can
 # point at another is for its publisher to say so.
-ELSEWHERE_CATEGORY = "elsewhere"
+SITE_CATEGORY = "site"
+WEB_CATEGORY = "web"
 
-RESERVED_CATEGORIES = (NAV_CATEGORY, ELSEWHERE_CATEGORY)
+RESERVED_CATEGORIES = (NAV_CATEGORY, SITE_CATEGORY, WEB_CATEGORY)
 
 # Ceiling on how many pages /site will read, to bound the rebuild.
 INDEX_LIMIT = 200
