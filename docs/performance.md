@@ -23,6 +23,11 @@ one of them:
   read.
 - Telegraph cannot delete, so nothing can be cleaned up, only marked.
 
+**GitHub's costs are not counted here.** A repository page has its own
+budget, its own rate limit and its own cache, and stating the numbers in two
+places guarantees one of them goes stale — as the entries below did.
+[docs/repositories.md](repositories.md) is where they live.
+
 ---
 
 ## How to measure
@@ -180,6 +185,11 @@ files*. That is the only rate-limited call on the site — 60/hour per reader
 
 **Fix:** persist the tree to `sessionStorage`.
 
+*Since superseded twice over: the dashboard spends four metered calls before
+the tree is touched at all, and the tree is now fetched only when Code is
+opened — which is where this finding wanted it. Current costs in
+[repositories.md](repositories.md).*
+
 ### F10 — Website cache does not survive a reload · **wrong, reverted**
 
 `cache` is an in-memory `Map`, so reloading refetches the master post.
@@ -191,6 +201,10 @@ was a globe staying dim on a site that had just been pointed somewhere.
 Only the GitHub tree persists now — 60 an hour, and a repository's shape
 does not change while somebody reads it. **Freshness beat one round trip,
 and the finding was wrong to weigh them the other way.**
+
+*The reasoning stands and the list has grown: every metered GitHub call
+persists on the same argument, under `api:` keys. Telegraph pages still do
+not.*
 
 ### F11 — Highlighting a large file blocks the main thread · **done, measured**
 

@@ -395,6 +395,9 @@ hands out the right links.
   finish, in about twenty minutes.
 - [Runbook](docs/runbook.md) — restart, logs, token rotation, and what to
   do when something was written wrong.
+- [Reading a repository](docs/repositories.md) — how a repository becomes
+  five pages: the routes, the four calls, the token, what a stranger may
+  put on your page, and how to add a sixth section.
 - [Performance](docs/performance.md) — where the requests go, what they
   cost, and a register of what to tighten next.
 - [More than one collection](docs/multiple-collections.md) — one token,
