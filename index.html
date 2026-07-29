@@ -796,6 +796,129 @@ function ghTokenKind(text) {
   return text.trim().startsWith("github_pat_") ? "fine" : "broad";
 }
 
+/* Each of the four calls may have failed on its own, so every source is
+   checked for shape before it is read. A section missing from a page is
+   better than a page that is not there. */
+const listOf = value => (Array.isArray(value) ? value : []);
+
+/* In GitHub's REST API a pull request is an issue carrying a pull_request
+   key, so one call answers both and the split happens here rather than in a
+   second request. */
+function splitIssues(list) {
+  const all = listOf(list);
+  return {
+    issues: all.filter(i => !i.pull_request),
+    pulls: all.filter(i => !!i.pull_request)
+  };
+}
+
+const labelsOf = i => (i.labels || []).map(l => (typeof l === "string" ? l : l.name));
+
+/* Sections are named for what somebody wants — bugs, ideas, what is done —
+   rather than for the query that finds them. A repository whose labels do
+   not match simply shows fewer of them; Open and Completed always work,
+   because state exists everywhere. */
+const SECTION_RULES = [
+  { key: "roadmap",   name: "Roadmap",       label: "roadmap", state: "open" },
+  { key: "bugs",      name: "Bugs",          label: "bug",     state: "open" },
+  { key: "features",  name: "Features",      label: "feature", state: "open" },
+  { key: "ideas",     name: "Ideas",         label: "idea",    state: "open" },
+  { key: "docs",      name: "Documentation", label: "docs",    state: "open" },
+  { key: "open",      name: "Open",          label: null,      state: "open" },
+  { key: "completed", name: "Completed",     label: null,      state: "closed" }
+];
+
+function deriveSections(issues) {
+  const all = listOf(issues);
+
+  return SECTION_RULES
+    .map(rule => ({
+      key: rule.key,
+      name: rule.name,
+      label: rule.label,
+      items: all.filter(i =>
+        i.state === rule.state &&
+        (rule.label === null || labelsOf(i).includes(rule.label)))
+    }))
+    .filter(section => section.items.length > 0);
+}
+
+/* "is:open", "label:bug" and bare words in one field. The prefixes are
+   understood so that somebody who knows them is not slowed down; nobody is
+   ever required to type one. */
+function parseFilterText(text) {
+  const out = { state: null, milestone: null, labels: [], words: [] };
+
+  for (const term of String(text || "").trim().split(/\s+/).filter(Boolean)) {
+    const [head, ...tail] = term.split(":");
+    const value = tail.join(":");
+    const key = head.toLowerCase();
+
+    if (value && key === "is") out.state = value.toLowerCase();
+    else if (value && key === "label") out.labels.push(value.toLowerCase());
+    else if (value && key === "milestone") out.milestone = value;
+    else out.words.push(term.toLowerCase());
+  }
+
+  return out;
+}
+
+function filterIssues(issues, filter) {
+  const all = listOf(issues);
+  const f = filter || {};
+  const typed = parseFilterText(f.text);
+
+  const state = typed.state || f.state || "all";
+  const labels = [...(f.labels || []), ...typed.labels].map(l => l.toLowerCase());
+  const milestone = typed.milestone || f.milestone || null;
+
+  return all.filter(i => {
+    if (state !== "all" && i.state !== state) return false;
+
+    const mine = labelsOf(i).map(l => l.toLowerCase());
+    if (labels.length && !labels.every(l => mine.includes(l))) return false;
+
+    if (milestone && (!i.milestone || i.milestone.title !== milestone)) return false;
+
+    if (typed.words.length) {
+      const hay = (i.title + " " + mine.join(" ")).toLowerCase();
+      if (!typed.words.every(w => hay.includes(w))) return false;
+    }
+
+    return true;
+  });
+}
+
+/* Both the facets and the field narrow the same set, so a facet's count is
+   what would remain if it were applied as well. A facet that falls to zero
+   is still listed — the rail keeps its shape, and the reader can see what
+   their typing excluded rather than watching options vanish. */
+function facetCounts(issues, filter) {
+  const all = listOf(issues);
+  const f = filter || {};
+  const countWith = extra => filterIssues(all, { ...f, ...extra }).length;
+
+  const labels = {};
+  for (const i of all) for (const l of labelsOf(i)) labels[l] = 0;
+  for (const l of Object.keys(labels)) {
+    labels[l] = countWith({ labels: [...(f.labels || []), l] });
+  }
+
+  const milestones = {};
+  for (const i of all) if (i.milestone) milestones[i.milestone.title] = 0;
+  for (const m of Object.keys(milestones)) milestones[m] = countWith({ milestone: m });
+
+  return {
+    state: {
+      open: countWith({ state: "open" }),
+      closed: countWith({ state: "closed" }),
+      all: countWith({ state: "all" })
+    },
+    labels,
+    milestones
+  };
+}
+
 /* ---------- end pure ---------- */
 
 function route() {
