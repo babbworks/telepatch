@@ -168,9 +168,19 @@ if (window.top === window && !document.getElementById("telepatch-root")) {
   let draft = { title: "", cats: "", body: "" };
   let draftTimer = null;
 
-  const keepDraft = () => {
+  const saveDraft = () => {
     clearTimeout(draftTimer);
-    draftTimer = setTimeout(() => chrome.storage.local.set({ draft }), 400);
+    draftTimer = null;
+    chrome.storage.local.set({ draft });
+  };
+
+  /* A second, not the 400 ms this used to be: continuous typing meant up
+     to 150 writes a minute for no gain. The cost of the longer wait is
+     paid back by writing on the way out instead - closing the panel,
+     leaving the field, or leaving the page. */
+  const keepDraft = () => {
+    if (draftTimer) return;
+    draftTimer = setTimeout(saveDraft, 1000);
   };
 
   const clearDraft = () => {
@@ -242,6 +252,8 @@ if (window.top === window && !document.getElementById("telepatch-root")) {
 
     for (const [field, key] of [[title, "title"], [cats, "cats"], [write, "body"]]) {
       field.addEventListener("input", () => { draft[key] = field.value; keepDraft(); });
+      // Leaving a field is a natural save point and costs nothing.
+      field.addEventListener("blur", saveDraft);
     }
 
     // The same markers as /post, so what somebody learns in the chat still
@@ -410,7 +422,7 @@ if (window.top === window && !document.getElementById("telepatch-root")) {
   }
 
   const open = () => { panel.hidden = false; draw(); };
-  const close = () => { panel.hidden = true; };
+  const close = () => { panel.hidden = true; saveDraft(); };
   const toggle = () => (panel.hidden ? open() : close());
 
   fab.addEventListener("click", toggle);
@@ -424,6 +436,8 @@ if (window.top === window && !document.getElementById("telepatch-root")) {
   addEventListener("keydown", e => {
     if (e.key === "Escape" && !panel.hidden) close();
   });
+
+  addEventListener("pagehide", saveDraft);
 
   chrome.runtime.onMessage.addListener(msg => {
     if (msg && msg.type === "toggle") toggle();

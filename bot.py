@@ -1190,23 +1190,15 @@ async def prompt_post(message, token, anonymous=False, override=None, site=None)
         extras["site"] = site
         note += "\n\nIt will be added to the collection you replied to."
 
-    browser = ""
-
-    try:
-        info = await telegraph(
-            "getAccountInfo", access_token=token, fields='["auth_url"]'
-        )
-        browser = (
-            "\n\nPrefer a real editor? "
-            f'<a href="{EDITOR_URL}#{token}">Write in the Telepatch editor</a>'
-            ", or the "
-            f'<a href="{info["auth_url"]}">Telegraph one</a> '
-            "(that link works for 5 minutes)."
-        )
-
-    except Exception:
-        # A bad token will surface on publish; do not block composing.
-        pass
+    # The Telepatch editor needs nothing but the token, which is already
+    # here. Telegraph's own editor needs a signed-in auth_url, which is a
+    # round trip - and it expires in five minutes, so fetching it now for
+    # a link most posts never follow would waste the call and the link.
+    # /manage offers it on demand instead.
+    browser = (
+        "\n\nPrefer a real editor? "
+        f'<a href="{EDITOR_URL}#{token}">Write in the Telepatch editor</a>.'
+    )
 
     await message.reply_text(
         "Reply with your post.\n\n"
@@ -1492,10 +1484,9 @@ async def find_site(update, context, command):
         notice = await update.message.reply_text("Finding your index…")
         scanned = await asyncio.to_thread(scan_pages, token)
         indexes = list_indexes(scanned)
-        await notice.delete()
 
         if not indexes:
-            await update.message.reply_text(
+            await notice.edit_text(
                 f"You have no index yet. Run /site first, then {command}."
             )
             return token, None
@@ -1504,13 +1495,14 @@ async def find_site(update, context, command):
         # and /footer overwrite prose, so picking the wrong one destroys
         # writing rather than merely surprising somebody.
         if len(indexes) > 1:
-            await update.message.reply_text(
+            await notice.edit_text(
                 f"You have {len(indexes)} collections, so {command} needs to "
                 "know which one.\n\nRun /collections and reply to the one you "
                 f"mean with {command}.",
             )
             return token, None
 
+        await notice.delete()
         path = indexes[0]["path"]
 
     return token, path
@@ -2059,25 +2051,33 @@ async def collections_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     indexes = list_indexes(scanned)
-    await notice.delete()
 
     if not indexes:
-        await update.message.reply_text(
+        await notice.edit_text(
             "You have no collections yet. Run /site to build your first."
         )
         return
 
-    await update.message.reply_text(
+    # Edited rather than deleted and replaced: two API calls become one,
+    # and the chat stops flickering.
+    await notice.edit_text(
         f"<b>{len(indexes)} collection{'' if len(indexes) == 1 else 's'}.</b>\n"
-        "Reply to any of these with /about, /footer, /byline, /link, /repo "
-        "or /site.",
+        "Reply to any of these with /about, /footer, /byline, /link, /repo, "
+        "/post or /site.",
         parse_mode=ParseMode.HTML,
     )
 
-    for index in indexes:
+    for at, index in enumerate(indexes):
 
         kind = ("curated - entries are added by hand" if index["extra"]
                 else "primary - /site enumerates everything you publish here")
+
+        # Telegram allows about one message a second to a chat before it
+        # starts issuing flood waits. One message each is deliberate - a
+        # path cannot ride in a button, at 62 of the allowed 64 bytes -
+        # but sending them all at once was not.
+        if at:
+            await asyncio.sleep(1.1)
 
         await update.message.reply_text(
             f"<b>{index['title']}</b>\n{kind}\n\n"

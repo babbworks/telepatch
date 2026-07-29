@@ -681,18 +681,74 @@ const link = (master, article, anchor) => {
 
 const cache = new Map();
 
+/* A Map dies with the page, so a reload spends every request again. That
+   is merely wasteful for a Telegraph page and actually costly for a
+   GitHub tree, which is the one rate-limited call here - 60 an hour, and
+   a reader who refreshes twice has spent three of them.
+
+   sessionStorage lasts the life of the tab and no longer, which is the
+   right lifetime: long enough to survive a reload, short enough that
+   nobody is reading a stale repository tomorrow. It throws in Safari's
+   private mode and when full, so every use is guarded and failure just
+   means the request happens again. */
+const KEEP = "tp:";
+const KEEP_MAX = 512 * 1024;
+
+function remember(key, value) {
+  try {
+    const text = JSON.stringify(value);
+
+    // A big repository's tree can be well over a megabyte, and filling
+    // the quota would evict everything else. Memory still holds it.
+    if (text.length <= KEEP_MAX) sessionStorage.setItem(KEEP + key, text);
+
+  } catch (err) {
+    // Private mode, quota, disabled storage. None of it is worth a word
+    // to the reader: the page works, it is just less quick.
+  }
+}
+
+function recall(key) {
+  try {
+    const text = sessionStorage.getItem(KEEP + key);
+    return text ? JSON.parse(text) : null;
+
+  } catch (err) {
+    return null;
+  }
+}
+
+/* Memory first, then the tab's store, then the network. */
+function cached(key) {
+  if (cache.has(key)) return cache.get(key);
+
+  const kept = recall(key);
+  if (kept) cache.set(key, kept);
+
+  return kept;
+}
+
+function keep(key, value) {
+  cache.set(key, value);
+  remember(key, value);
+  return value;
+}
+
 async function getPage(path) {
-  if (cache.has(path)) return cache.get(path);
+  const kept = cached(path);
+  if (kept) return kept;
+
   const res = await fetch(
     API + "/getPage?return_content=true&path=" + encodeURIComponent(path)
   );
   const raw = await res.text();
   const data = JSON.parse(raw);
   if (!data.ok) throw new Error(data.error || "unavailable");
+
   data.result._bytes = raw.length;
   data.result._status = res.status;
-  cache.set(path, data.result);
-  return data.result;
+
+  return keep(path, data.result);
 }
 
 /* Only schemes that cannot execute. A javascript: href used to be defused
@@ -766,7 +822,9 @@ const MAX_FILE = 400 * 1024;
    file afterwards comes from raw, which has no limit at all. */
 async function ghTree(owner, repo) {
   const key = "tree:" + owner + "/" + repo;
-  if (cache.has(key)) return cache.get(key);
+
+  const kept = cached(key);
+  if (kept) return kept;
 
   const res = await fetch("https://api.github.com/repos/" + owner + "/" +
     repo + "/git/trees/HEAD?recursive=1");
@@ -777,9 +835,15 @@ async function ghTree(owner, repo) {
   if (!res.ok) throw new Error("could not read that repository");
 
   const data = await res.json();
-  const tree = { entries: data.tree || [], truncated: !!data.truncated };
-  cache.set(key, tree);
-  return tree;
+
+  // Only what a listing needs. The API sends a mode, a sha and a URL for
+  // every entry, which on a large repository is most of the payload and
+  // none of the use.
+  const entries = (data.tree || []).map(item => ({
+    path: item.path, type: item.type, size: item.size,
+  }));
+
+  return keep(key, { entries, truncated: !!data.truncated });
 }
 
 async function ghFetch(resource) {
@@ -1033,7 +1097,22 @@ function hlNodes(html, parent) {
   copy(holder.content, parent);
 }
 
+/* Measured rather than guessed at. highlight.js itself is quick - 400 kB
+   of Python tokenises in about 200 ms on a laptop - but it produces
+   13,500 spans at that size, and it is building and laying out that many
+   nodes that stalls a phone, not the lexing.
+
+   Past this, the file is shown as plain text: one text node, instant, and
+   still perfectly readable. Colour is a convenience and responsiveness is
+   not. */
+const HL_MAX = 150 * 1024;
+
 async function paintCode(src, name, pre) {
+  if (src.length > HL_MAX) {
+    pre.append(src);
+    return;
+  }
+
   const lib = await loadHljs();
   const lang = hlLang(name);
 
@@ -1833,8 +1912,7 @@ async function showGithub(resource) {
 
   let doc = null, failed = null;
   try {
-    if (cache.has(resource)) doc = cache.get(resource);
-    else { doc = await ghFetch(resource); cache.set(resource, doc); }
+    doc = cached(resource) || keep(resource, await ghFetch(resource));
   } catch (err) {
     // Now that the contents come first, a repository is still worth showing
     // without a README. A file that will not load is a dead end.

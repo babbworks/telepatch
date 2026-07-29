@@ -109,17 +109,39 @@ async function discover(token) {
 
   const found = [];
 
-  // Sequential on purpose: a burst of parallel requests against a free
-  // API on somebody else's behalf is a bad way to introduce yourself.
-  for (const page of pages || []) {
-    const full = await telegraph("getPage", {
-      path: page.path, return_content: "true"
-    });
+  /* Connecting is the first thing anyone does, and reading a page at a
+     time made it the slowest. A few at once is enough to hide the
+     latency; a burst of two hundred against a free API on somebody
+     else's behalf is a bad way to introduce yourself, and the limits are
+     not documented. */
+  const queue = [...(pages || [])];
 
-    if ((full.content || []).some(isMarker) && !isRetired(full.content)) {
-      found.push({ path: full.path, title: full.title });
+  const worker = async () => {
+    while (queue.length) {
+      const page = queue.shift();
+
+      try {
+        const full = await telegraph("getPage", {
+          path: page.path, return_content: "true"
+        });
+
+        if ((full.content || []).some(isMarker) && !isRetired(full.content)) {
+          found.push({ path: full.path, title: full.title });
+        }
+
+      } catch (err) {
+        // One unreadable page is not a reason to refuse the account.
+      }
     }
-  }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(6, queue.length) }, worker)
+  );
+
+  // getPageList is newest first; the workers finish out of order.
+  const order = new Map((pages || []).map((p, i) => [p.path, i]));
+  found.sort((a, b) => order.get(a.path) - order.get(b.path));
 
   return { name: account.short_name || account.author_name || "Telepatch", found };
 }

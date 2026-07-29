@@ -64,7 +64,7 @@ What "good" means, so a regression is recognisable.
 | | Target |
 |---|---|
 | Command that only needs an index path | 1–2 Telegraph calls |
-| `/site`, steady state | 2–3 calls |
+| `/site`, steady state | 3–4 calls |
 | `/site`, first run or forced refresh | 1 + N, concurrent |
 | Website first paint | 2 requests |
 | Repo page | 2–3, at most one rate-limited |
@@ -81,12 +81,12 @@ Measured by reading the code, 2026-07-28. **N** = pages on the account.
 | `/pages` | 1 | 1 | `getPageList`, limit 50 |
 | `/views` | 1 | 1 | no token involved |
 | `/new` | 1 | 2 | `createAccount`, then a pin |
-| `/post` (prompt) | 1 | 1 | the call is only for the editor link |
+| `/post` (prompt) | **0** | 1 | the editor link needs only the token |
 | `/post` (reply) | 2 | 1 | 4 when writing into a collection |
 | `/revise` | 2 | 1 | read-before-write |
 | `/newsite` | 2 | 2 | plus a pin |
 | `/about` `/footer` `/byline` `/link` `/repo` `/unfile` `/retire` | 2, or **1 + N + 2** | 1–3 | the scan only when nothing carries a path |
-| `/collections` | 1 + N | **1 + M** | one message per collection |
+| `/collections` | 1 + N | 1 + M | one message each, paced a second apart |
 | `/site`, steady state | **3–4** | 3–4 | index, list, whatever is new, write |
 | `/site refresh`, first run | 1 + N + 2 | 3–4 | concurrent, 8 at a time |
 
@@ -147,14 +147,14 @@ in series.
 **Fix:** a pool of about 8. Not 200 — an unbounded burst at a free API on
 someone's behalf is rude, and the limits are not documented.
 
-### F6 — `/post` spends a round trip on a link most posts never use · open · low
+### F6 — `/post` spends a round trip on a link most posts never use · **done**
 
 `prompt_post` calls `getAccountInfo` solely to build the five-minute
 `auth_url` editor link, blocking, before anything has been typed.
 
 **Fix:** offer it on demand, or in a second message.
 
-### F7 — `/collections` sends one message per collection · open · medium
+### F7 — `/collections` sends one message per collection · **done**
 
 1 + M sends in a burst. Telegram's sustained limit is about one message per
 second per chat, so this risks a flood wait as collections accumulate.
@@ -165,13 +165,13 @@ But the *burst* is not deliberate.
 
 **Fix:** pace the sends, or cap the list and paginate.
 
-### F8 — Progress notices cost two Telegram calls each · open · low
+### F8 — Progress notices cost two Telegram calls each · **done**
 
 Several commands send "Reading your pages…" then delete it. Editing the
 notice into the result instead would halve that, and would stop the chat
 flickering.
 
-### F9 — `ghTree` moved from opt-in to mandatory · open · medium
+### F9 — `ghTree` moved from opt-in to mandatory · **done**
 
 **A regression introduced by "files first".** The repo page now fetches the
 tree on every view; before, it only did so when someone clicked *Browse all
@@ -180,26 +180,38 @@ files*. That is the only rate-limited call on the site — 60/hour per reader
 
 **Fix:** persist the tree to `sessionStorage`.
 
-### F10 — Website cache does not survive a reload · open · low
+### F10 — Website cache does not survive a reload · **done**
 
 `cache` is an in-memory `Map`. Reloading refetches the master post every
 time. `sessionStorage` would hold it for the tab's life.
 
-### F11 — Highlighting a large file blocks the main thread · open · medium
+### F11 — Highlighting a large file blocks the main thread · **done, measured**
 
 `MAX_FILE` is 400 kB. highlight.js on a file that size, plus building one
 DOM node per token, will visibly freeze a phone. Untested at the limit.
 
-**Fix:** measure first. Then either lower the ceiling for highlighting
-specifically, or highlight only the visible region.
+Measured, on this laptop, Python through highlight.js:
 
-### F12 — The extension's `discover()` is `scan_pages` again · open · medium
+| file | tokenise | spans | HTML out |
+|---|---|---|---|
+| 50 kB | 56 ms | 1,673 | 112 kB |
+| 200 kB | 114 ms | 6,699 | 449 kB |
+| 400 kB | 203 ms | 13,499 | 901 kB |
+
+So the lexer was never the problem. Building and laying out **13,500 DOM
+nodes** is, and the whitelist walker rebuilds every one of them.
+
+**Fixed:** above 150 kB a file is shown as plain text — one text node,
+instant, still perfectly readable. Colour is a convenience; response is
+not.
+
+### F12 — The extension's `discover()` is `scan_pages` again · **done**
 
 Sequential `getPage` per page on connect. Its own README already admits
 this is slow on a large account, and it is the first thing anyone
 experiences.
 
-### F13 — Draft autosave writes every 400 ms of typing · open · low
+### F13 — Draft autosave writes every 400 ms of typing · **done**
 
 Continuous typing means up to 150 `chrome.storage.local` writes a minute.
 Harmless in principle, wasteful in practice.
@@ -249,9 +261,12 @@ Kept so they are not rediscovered and re-argued.
 - **2026-07-28** — first pass. F1–F16 recorded, three optimisations
   rejected with reasons.
 - **2026-07-28** — F1, F2, F3, F4, F5, F14, F16 fixed; F15 mostly follows
-  from F4. Remaining and open: **F6** (`/post` spends a call on a link most
-  posts never use), **F7** (`/collections` sends a burst), **F8** (progress
-  notices cost two calls), **F9** (`ghTree` on every repo view — a
-  regression), **F10** (website cache dies on reload), **F11**
-  (highlighting at the 400 kB ceiling, unmeasured), **F12** (the
-  extension's `discover()`), **F13** (draft autosave every 400 ms).
+  from F4.
+- **2026-07-28** — F6 to F13 fixed. **Every finding in this register is
+  now closed.** F11 was measured before it was fixed, and the measurement
+  is kept above because it says something the fix does not: the lexer was
+  never the cost.
+
+Next pass should start by re-running the measurements at the top rather
+than by reading this list. A register with nothing open is a register
+that has stopped being looked at.

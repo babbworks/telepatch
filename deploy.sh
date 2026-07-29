@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 #
-# Deploy Telepatch to a server running the systemd unit.
+# Deploy Telepatch to whatever is running the systemd unit.
 #
-#   ./deploy.sh telepatch@example.com          # deploy main
-#   ./deploy.sh telepatch@example.com v1.2.0   # deploy a tag
+#   ./deploy.sh                                # this machine, user unit
+#   ./deploy.sh local v1.2.0                   # this machine, a tag
+#   ./deploy.sh telepatch@example.com          # a server, main
+#   ./deploy.sh telepatch@example.com v1.2.0   # a server, a tag
 #
 # Only one process may poll a token at a time, so this stops before it
 # starts. There is no rolling deploy and there should not be: two bots on
@@ -14,13 +16,42 @@
 
 set -euo pipefail
 
-HOST="${1:?usage: deploy.sh user@host [ref]}"
+HOST="${1:-local}"
 REF="${2:-main}"
-DIR="${TELEPATCH_DIR:-/opt/telepatch}"
 UNIT="${TELEPATCH_UNIT:-telepatch-bot}"
 
-echo "==> tests, locally, before anything leaves this machine"
+echo "==> tests first, always"
 python -m pytest -q
+
+# ---------------------------------------------------------------- local
+
+if [ "$HOST" = "local" ]; then
+  echo "==> deploying $REF here, as a user service"
+
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "working tree is dirty; commit or stash first" >&2
+    exit 1
+  fi
+
+  git fetch --tags --prune origin
+  git checkout --detach "origin/$REF" 2>/dev/null || git checkout --detach "$REF"
+
+  ../.venv/bin/pip install -q -r requirements.txt
+  ../.venv/bin/python -c "import ast; ast.parse(open('bot.py').read())"
+
+  systemctl --user restart "$UNIT"
+  sleep 5
+
+  systemctl --user is-active "$UNIT"
+  journalctl --user -u "$UNIT" -n 10 --no-pager
+
+  echo "==> deployed $REF"
+  exit 0
+fi
+
+# --------------------------------------------------------------- remote
+
+DIR="${TELEPATCH_DIR:-/opt/telepatch}"
 
 echo "==> deploying $REF to $HOST:$DIR"
 
