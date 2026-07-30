@@ -701,6 +701,11 @@ body.wide{--col:68rem}
 .intro p{margin:0 0 1.1rem;max-width:34rem}
 .intro .lead{font-size:1.15rem}
 .intro code{font-family:var(--mono);font-size:.85em;background:var(--panel);padding:.12em .4em}
+.intro .demo-link{display:flex;gap:.7rem;align-items:center;max-width:42rem;width:100%;margin:1.2rem 0 1.8rem;padding:.8rem 1rem;border:1px solid var(--hair);border-radius:.6rem;background:var(--panel)}
+.intro .demo-link label{font-family:var(--sans);font-size:.8rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--graphite);white-space:nowrap}
+.intro .demo-link input{flex:1;min-width:0;border:1px solid var(--hair);border-radius:.45rem;padding:.65rem .75rem;font:inherit;background:var(--paper);color:var(--ink)}
+.intro .demo-link button{border:0;border-radius:.45rem;padding:.65rem .95rem;font:inherit;font-weight:600;background:var(--patch);color:var(--paper);cursor:pointer}
+.intro .demo-link button:hover{filter:brightness(.95)}
 .steps{list-style:none;margin:2rem 0;padding:0;border-top:1px solid var(--hair)}
 .steps li{
   display:grid;grid-template-columns:5.5rem 1fr;gap:1rem;
@@ -3892,17 +3897,36 @@ function retireBoot() {
 
 /* ---------- landing ---------- */
 
+function pageFromTelegraphLink(value) {
+  const raw = String(value == null ? "" : value).trim();
+  if (!raw) return "";
+
+  let path = raw;
+  try {
+    const url = new URL(raw);
+    path = url.hash ? url.hash.slice(1) : (url.pathname || "");
+  } catch (err) {}
+
+  path = path.replace(/^https?:\/\/(?:www\.)?telegra\.ph/i, "")
+    .split(/[?#]/)[0]
+    .replace(/^\/+|\/+$/g, "");
+
+  if (!path) return "";
+  const parts = path.split("/").filter(Boolean);
+  return parts[parts.length - 1] || "";
+}
+
 function landing() {
   boot.remove();
   const wrap = el("div", "intro"); 
   const hero = el("div", "hero");
   const heroMark = el("div", "hero-mark");
   heroMark.innerHTML = '<svg viewBox="24.3 42.6 137.8 140.1" aria-hidden="true" fill="currentColor"><path d="m 42.65,79.85 -9.3,43.95 c -1.5,6.75 -1.5,7.2 -1.5,9.6 0,6 2.85,9.15 8.1,9.15 5.55,0 11.55,-2.7 19.95,-8.85 l 11.55,-8.55 -1.95,-3.9 -8.4,6 c -3.3,2.4 -5.25,3.15 -7.95,3.15 -2.85,0 -3.75,-1.05 -3.75,-4.2 0,-3.15 0.45,-6.45 1.35,-10.8 L 58.4,79.85 h 7.05 c 6.45,0 9.45,0.15 13.8,0.75 l 2.1,-8.4 -0.9,-0.75 -20.1,0.75 1.95,-8.4 c 1.05,-4.5 2.25,-8.7 4.65,-17.4 l -1.5,-1.8 -9.9,3.6 c -3,1.05 -5.25,1.65 -8.55,2.1 v 2.4 c 0,4.05 -0.45,7.5 -2.4,18.3 l -17.25,4.8 -1.05,4.05 z"/><path d="m 81.04989,180.65 c 1.95,-0.3 2.55,-0.45 4.8,-1.05 6.45,-1.35 9.3,-1.8 12,-2.1 0.6,-9.15 1.8,-14.7 7.2,-36 3.15,0.75 5.25,1.05 8.4,1.05 4.95,0 9.15,-0.9 12.9,-2.55 4.05,-1.95 12,-7.5 17.7,-12.3 9.75,-8.4 16.05,-25.35 16.05,-43.2 0,-9.9 -2.85,-14.85 -8.4,-14.85 -7.05,0 -14.1,3.15 -22.2,9.9 -6.45,5.55 -10.5,10.65 -17.55,22.5 l 1.35,-6.15 c 1.35,-5.85 2.1,-9 2.25,-9.75 1.2,-6.45 1.65,-9.15 1.65,-11.85 0,-3 -1.35,-4.65 -4.05,-4.65 -3.75,0 -8.55,2.25 -15.3,7.35 l -12.6,9.3 1.95,4.05 4.8,-3.3 c 2.4,-1.65 4.5,-2.55 6.15,-2.55 1.05,0 1.65,0.75 1.65,2.4 0,3.9 -1.8,15.75 -3.6,23.4 l -11.85,51 c -1.95,8.25 -3,12.3 -4.8,18.3 z m 27.9,-58.8 c 2.4,-10.5 4.2,-15.15 9.3,-22.95 7.05,-10.8 15,-17.55 20.55,-17.55 2.85,0 4.2,3 4.2,8.55 0,10.65 -4.35,27 -10.05,37.2 -2.85,5.1 -7.2,8.1 -12,8.1 -4.8,0 -9,-1.2 -14.1,-4.05 z"/></svg>';
-  hero.append(heroMark, el("h1", null, "A publication that assembles itself."));
+  hero.append(heroMark, el("h1", null, "Content that self-assembles."));
   wrap.appendChild(hero);
   wrap.appendChild(el("p", "lead",
-    "Telepatch turns one Telegraph page into a small website. " +
-    "Add its address after the # and it builds in front of you, locally."));
+    "Telepatch turns a single index page from telegra.ph into a simple website. Add the pagename to telepat.ch/# and the site constrructs, locally." +
+    "."));
   wrap.appendChild(el("p", null,
     "Nothing is stored here. Articles are fetched from Telegraph and laid " +
     "out in your browser. No account, no tracking, no third-party requests."));
@@ -3913,8 +3937,27 @@ function landing() {
   a.href = BOT; a.rel = "noopener";
   project.href = "https://telepat.ch/#Telepatch-07-27";
   project.rel = "noopener";
-  p.append("Start in Telegram with ", a, ". Or read about ", project, ".");
+  p.append("Start in Telegram with ", a, " or read about ", project, ".");
   wrap.appendChild(p);
+
+  const demo = el("form", "demo-link");
+  const demoLabel = el("label", null, "Open a Telegraph page");
+  const demoInput = el("input");
+  const demoButton = el("button", null, "Open");
+  demoInput.type = "url";
+  demoInput.placeholder = "https://telegra.ph/telepatch-07-27";
+  demoInput.autocomplete = "url";
+  demoInput.spellcheck = false;
+  demoButton.type = "submit";
+  demo.addEventListener("submit", ev => {
+    ev.preventDefault();
+    const page = pageFromTelegraphLink(demoInput.value);
+    if (page) location.hash = "#" + encodeURIComponent(page);
+  });
+  demoLabel.htmlFor = "telegraph-demo";
+  demoInput.id = "telegraph-demo";
+  demo.append(demoLabel, demoInput, demoButton);
+  wrap.appendChild(demo);
 
   const steps = el("ul", "steps");
   for (const [cmd, why] of [
