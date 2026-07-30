@@ -3919,7 +3919,7 @@ function pageFromTelegraphLink(value) {
 function routeFromTelegraphPage(page) {
   const cleaned = String(page == null ? "" : page).trim();
   if (!cleaned) return "";
-  return master + "/" + cleaned;
+  return cleaned;
 }
 
 function landing() {
@@ -3972,7 +3972,7 @@ function landing() {
     ["/post", "Write. First line is the title, second line is your categories."],
     ["/site", "Build your index. The bot hands you a link like the one below."],
     ["/about", "Set the introduction for your site."],
-    ["/footer", "Set the footer for your site>."],
+    ["/footer", "Set the footer for your site."],
     ["/link", "Include Web pages as site content."],
     ["/unfile", "Remove entry from a site index."],
     ["/repo", "Add a GitHub repository as a custom dashboard."], 
