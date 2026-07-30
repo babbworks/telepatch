@@ -3907,6 +3907,15 @@ function landing() {
     "Nothing is stored here. Articles are fetched from Telegraph and laid " +
     "out in your browser. No account, no tracking, no third-party requests."));
 
+  const p = el("p");
+  const a = el("a", null, "@telepatchbot");
+  const project = el("a", null, "the project");
+  a.href = BOT; a.rel = "noopener";
+  project.href = "https://telepat.ch/#Telepatch-07-27";
+  project.rel = "noopener";
+  p.append("Start in Telegram with ", a, ". Or read about ", project, ".");
+  wrap.appendChild(p);
+
   const steps = el("ul", "steps");
   for (const [cmd, why] of [
     ["/new", "Create an identity in Telegram. The bot keeps no copy of it."],
@@ -3925,12 +3934,6 @@ function landing() {
     steps.appendChild(li);
   }
   wrap.appendChild(steps);
-
-  const p = el("p");
-  const a = el("a", null, "@telepatchbot");
-  a.href = BOT; a.rel = "noopener";
-  p.append("Start in Telegram with ", a, ".");
-  wrap.appendChild(p);
 
   $("view").appendChild(wrap);
 
