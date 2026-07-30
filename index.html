@@ -3916,6 +3916,12 @@ function pageFromTelegraphLink(value) {
   return parts[parts.length - 1] || "";
 }
 
+function routeFromTelegraphPage(page) {
+  const cleaned = String(page == null ? "" : page).trim();
+  if (!cleaned) return "";
+  return master + "/" + cleaned;
+}
+
 function landing() {
   boot.remove();
   const wrap = el("div", "intro"); 
@@ -3952,7 +3958,8 @@ function landing() {
   demo.addEventListener("submit", ev => {
     ev.preventDefault();
     const page = pageFromTelegraphLink(demoInput.value);
-    if (page) location.hash = "#" + encodeURIComponent(page);
+    const route = routeFromTelegraphPage(page);
+    if (route) location.hash = "#" + encodeURIComponent(route);
   });
   demoLabel.htmlFor = "telegraph-demo";
   demoInput.id = "telegraph-demo";
