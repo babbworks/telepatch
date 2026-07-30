@@ -547,8 +547,13 @@ body.wide{--col:68rem}
 
 /* The dashboard's two tracks. Below the width that fits a 15rem rail the
    grid collapses to one column and the rail's contents go above the list. */
-.dash{display:grid;grid-template-columns:1fr 15rem;gap:1.6rem;align-items:start}
-@media (max-width:48rem){ .dash{grid-template-columns:1fr;gap:1rem} }
+/* minmax(0,…) rather than 1fr, which means minmax(auto,1fr) and so refuses
+   to shrink below the widest issue title. A row's title is set nowrap so it
+   can ellipsis, which makes that floor the full string: the track then
+   overflows its own container and the page scrolls sideways. Measured at a
+   700px column: 664px demanded against 652px available, 386px after. */
+.dash{display:grid;grid-template-columns:minmax(0,1fr) 15rem;gap:1.6rem;align-items:start}
+@media (max-width:48rem){ .dash{grid-template-columns:minmax(0,1fr);gap:1rem} }
 
 .facts div{
   display:flex;justify-content:space-between;gap:.75rem;
@@ -963,6 +968,43 @@ function splitIssues(list) {
 
 const labelsOf = i => (i.labels || []).map(l => (typeof l === "string" ? l : l.name));
 
+const authorOf = i => ((i && i.user) || {}).login || "";
+
+/* GitHub's `state` is only ever open or closed, which flattens four things
+   a reader needs kept apart: a merged pull request is not a rejected one,
+   and an issue closed as not planned is not a job done. Every one of these
+   is already in the payload; showing "closed" for all of them is the
+   display being wrong rather than merely thin. */
+function issueState(i) {
+  const item = i || {};
+  const pr = item.pull_request;
+
+  if (pr && pr.merged_at) return "merged";
+  if (pr && item.draft && item.state !== "closed") return "draft";
+  if (item.state === "closed") {
+    return item.state_reason === "not_planned" ? "not planned" : "closed";
+  }
+  return "open";
+}
+
+/* The only signal of enthusiasm GitHub gives, and it arrives with the
+   issue. Only reactions somebody actually left are listed — a row of
+   zeroes says nothing and costs a line. */
+const REACTIONS = [
+  ["+1", "👍"], ["heart", "❤️"], ["hooray", "🎉"], ["rocket", "🚀"],
+  ["eyes", "👀"], ["laugh", "😄"], ["confused", "😕"], ["-1", "👎"]
+];
+
+function reactionsOf(i) {
+  const r = (i || {}).reactions;
+  if (!r) return [];
+
+  return REACTIONS
+    .map(([key, glyph]) => [glyph, r[key] || 0])
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1]);
+}
+
 /* Sections are named for what somebody wants — bugs, ideas, what is done —
    rather than for the query that finds them. A repository whose labels do
    not match simply shows fewer of them; Open and Completed always work,
@@ -996,7 +1038,7 @@ function deriveSections(issues) {
    understood so that somebody who knows them is not slowed down; nobody is
    ever required to type one. */
 function parseFilterText(text) {
-  const out = { state: null, milestone: null, labels: [], words: [] };
+  const out = { state: null, milestone: null, author: null, labels: [], words: [] };
 
   for (const term of String(text || "").trim().split(/\s+/).filter(Boolean)) {
     const [head, ...tail] = term.split(":");
@@ -1006,6 +1048,7 @@ function parseFilterText(text) {
     if (value && key === "is") out.state = value.toLowerCase();
     else if (value && key === "label") out.labels.push(value.toLowerCase());
     else if (value && key === "milestone") out.milestone = value;
+    else if (value && (key === "author" || key === "by")) out.author = value.replace(/^@/, "");
     else out.words.push(term.toLowerCase());
   }
 
@@ -1020,6 +1063,7 @@ function filterIssues(issues, filter) {
   const state = typed.state || f.state || "all";
   const labels = [...(f.labels || []), ...typed.labels].map(l => l.toLowerCase());
   const milestone = typed.milestone || f.milestone || null;
+  const author = (typed.author || f.author || "").toLowerCase();
 
   return all.filter(i => {
     if (state !== "all" && i.state !== state) return false;
@@ -1028,6 +1072,8 @@ function filterIssues(issues, filter) {
     if (labels.length && !labels.every(l => mine.includes(l))) return false;
 
     if (milestone && (!i.milestone || i.milestone.title !== milestone)) return false;
+
+    if (author && authorOf(i).toLowerCase() !== author) return false;
 
     if (typed.words.length) {
       const hay = (i.title + " " + mine.join(" ")).toLowerCase();
@@ -1057,6 +1103,13 @@ function facetCounts(issues, filter) {
   for (const i of all) if (i.milestone) milestones[i.milestone.title] = 0;
   for (const m of Object.keys(milestones)) milestones[m] = countWith({ milestone: m });
 
+  /* Authors are a facet like any other, but there can be a hundred of them
+     where there are a dozen labels. The rail shows the busiest; the field
+     takes "author:" for anybody else. */
+  const authors = {};
+  for (const i of all) { const a = authorOf(i); if (a) authors[a] = 0; }
+  for (const a of Object.keys(authors)) authors[a] = countWith({ author: a });
+
   return {
     state: {
       open: countWith({ state: "open" }),
@@ -1064,7 +1117,8 @@ function facetCounts(issues, filter) {
       all: countWith({ state: "all" })
     },
     labels,
-    milestones
+    milestones,
+    authors
   };
 }
 
@@ -1384,6 +1438,12 @@ async function ghApi(path) {
    allowed to fail on its own: a reader who has run out of budget still gets
    every section whose data arrived, and the README always, because that
    comes from raw and is not rate limited at all. */
+/* The conversation on one issue. The only call in this feature spent on a
+   reader's behalf after arrival, which is why it is asked for rather than
+   fetched: the button says what it costs before it is pressed. */
+const ghComments = (repo, number) =>
+  ghApi("/repos/" + repo + "/issues/" + number + "/comments?per_page=100");
+
 async function ghRepoData(repo) {
   const ask = path => ghApi("/repos/" + repo + path).catch(err => ({ error: err }));
 
@@ -2810,6 +2870,75 @@ function overview(art, repo, data) {
 
 /* ---------- Development ---------- */
 
+/* Who wrote it, and what they are to this repository. The association is
+   the quiet half: it says whether a maintainer or a stranger is speaking,
+   which is the same distinction that decides whether their images render. */
+function personLine(login, association) {
+  const frag = document.createDocumentFragment();
+  if (!login) return frag;
+
+  const who = el("a", "who", "@" + login);
+  who.href = "https://github.com/" + encodeURIComponent(login);
+  who.target = "_blank";
+  who.rel = "noopener noreferrer";
+  frag.appendChild(who);
+
+  // NONE is the common case and saying it of every stranger is noise.
+  const assoc = String(association || "").toLowerCase();
+  if (assoc && assoc !== "none") {
+    const badge = el("span", "assoc" + (assoc === "owner" || assoc === "member" ? " owner" : ""),
+                     assoc.replace(/_/g, " "));
+    frag.appendChild(badge);
+  }
+
+  return frag;
+}
+
+const STATE_CLASS = {
+  open: "open", merged: "merged", draft: "draft",
+  closed: "closed", "not planned": "closed"
+};
+
+/* Two lines: the title never competes with the participation for width.
+   Everything on the second line arrived with the issue and cost nothing. */
+function issueRow(repo, i) {
+  const row = el("div", "row2");
+
+  const top = el("div", "top");
+  const title = el("span", "t");
+  const a = el("a", null, i.title);
+  a.href = link(master, "gh:" + repo + "@issues/" + i.number);
+  title.appendChild(a);
+  top.append(el("span", "n", "#" + i.number), title,
+             el("span", "when", ago(i.updated_at)));
+  row.appendChild(top);
+
+  const meta = el("div", "meta");
+  meta.appendChild(personLine(authorOf(i), i.author_association));
+
+  // Only when it is not the plain thing the facet already says.
+  const state = issueState(i);
+  if (state !== "open" && state !== "closed") {
+    meta.appendChild(el("span", "state " + STATE_CLASS[state], state));
+  }
+
+  for (const l of labelsOf(i)) meta.appendChild(el("span", "lab", l));
+
+  if (i.milestone) meta.appendChild(el("span", "lab", i.milestone.title));
+
+  for (const who of (i.assignees || [])) {
+    meta.appendChild(el("span", "assoc", "→ @" + who.login));
+  }
+
+  const signals = [];
+  if (i.comments) signals.push("💬 " + i.comments);
+  for (const [glyph, n] of reactionsOf(i)) signals.push(glyph + " " + n);
+  if (signals.length) meta.appendChild(el("span", "sig", signals.join(" · ")));
+
+  row.appendChild(meta);
+  return row;
+}
+
 /* The facets and the field narrow the same set, so both read one filter
    object and both are redrawn whenever either changes. Nothing here costs a
    request: it is all slicing the payload already fetched. */
@@ -2820,7 +2949,7 @@ function development(pane, repo, data) {
   }
 
   const { issues } = splitIssues(okList(data.issues));
-  const filter = { state: "open", labels: [], milestone: null, text: "" };
+  const filter = { state: "open", labels: [], milestone: null, author: null, text: "" };
 
   const dash = el("div", "dash");
   const left = el("div");
@@ -2840,20 +2969,7 @@ function development(pane, repo, data) {
     const shown = filterIssues(issues, filter);
 
     list.replaceChildren();
-    for (const i of shown) {
-      const row = el("div", "row");
-      const title = el("span", "t");
-      const a = el("a", null, i.title);
-      a.href = link(master, "gh:" + repo + "@issues/" + i.number);
-      title.appendChild(a);
-
-      row.append(el("span", "n", "#" + i.number), title);
-
-      const label = labelsOf(i)[0];
-      if (label) row.appendChild(el("span", "tag", label));
-      row.appendChild(el("span", "when", ago(i.updated_at)));
-      list.appendChild(row);
-    }
+    for (const i of shown) list.appendChild(issueRow(repo, i));
     if (!shown.length) list.appendChild(el("p", "empty", "Nothing matches that."));
 
     /* One line saying what is showing. With two mechanisms narrowing one
@@ -2862,6 +2978,7 @@ function development(pane, repo, data) {
     if (filter.state !== "all") bits.push(filter.state);
     for (const l of filter.labels) bits.push("label:" + l);
     if (filter.milestone) bits.push("milestone:" + filter.milestone);
+    if (filter.author) bits.push("@" + filter.author);
     if (filter.text) bits.push('"' + filter.text + '"');
 
     said.replaceChildren();
@@ -2873,7 +2990,7 @@ function development(pane, repo, data) {
       clear.type = "button";
       clear.addEventListener("click", () => {
         filter.state = "all"; filter.labels = []; filter.milestone = null;
-        filter.text = ""; field.value = ""; draw();
+        filter.author = null; filter.text = ""; field.value = ""; draw();
       });
       said.appendChild(clear);
     }
@@ -2919,6 +3036,23 @@ function drawFacets(host, counts, filter, redraw) {
   group("Milestone", Object.entries(counts.milestones),
     name => filter.milestone === name,
     name => { filter.milestone = filter.milestone === name ? null : name; });
+
+  /* A repository can have a hundred authors where it has a dozen labels,
+     so the rail shows the busiest eight and the field takes "author:" for
+     anybody else. One already chosen always stays listed, or selecting a
+     quiet author would make their own facet vanish. */
+  const authors = Object.entries(counts.authors)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+
+  const shown = authors.slice(0, 8);
+  if (filter.author && !shown.some(([n]) => n === filter.author)) {
+    const mine = authors.find(([n]) => n === filter.author);
+    if (mine) shown.push(mine);
+  }
+
+  group("Author", shown,
+    name => filter.author === name,
+    name => { filter.author = filter.author === name ? null : name; });
 }
 
 /* ---------- Releases, Activity, one issue ---------- */
@@ -3749,7 +3883,10 @@ function retireBoot() {
 function landing() {
   boot.remove();
   const wrap = el("div", "intro");
-
+<svg class="mark" viewBox="24.3 42.6 137.8 140.1" aria-hidden="true" fill="currentColor">
+      <path d="m 42.65,79.85 -9.3,43.95 c -1.5,6.75 -1.5,7.2 -1.5,9.6 0,6 2.85,9.15 8.1,9.15 5.55,0 11.55,-2.7 19.95,-8.85 l 11.55,-8.55 -1.95,-3.9 -8.4,6 c -3.3,2.4 -5.25,3.15 -7.95,3.15 -2.85,0 -3.75,-1.05 -3.75,-4.2 0,-3.15 0.45,-6.45 1.35,-10.8 L 58.4,79.85 h 7.05 c 6.45,0 9.45,0.15 13.8,0.75 l 2.1,-8.4 -0.9,-0.75 -20.1,0.75 1.95,-8.4 c 1.05,-4.5 2.25,-8.7 4.65,-17.4 l -1.5,-1.8 -9.9,3.6 c -3,1.05 -5.25,1.65 -8.55,2.1 v 2.4 c 0,4.05 -0.45,7.5 -2.4,18.3 l -17.25,4.8 -1.05,4.05 z"/>
+      <path d="m 81.04989,180.65 c 1.95,-0.3 2.55,-0.45 4.8,-1.05 6.45,-1.35 9.3,-1.8 12,-2.1 0.6,-9.15 1.8,-14.7 7.2,-36 3.15,0.75 5.25,1.05 8.4,1.05 4.95,0 9.15,-0.9 12.9,-2.55 4.05,-1.95 12,-7.5 17.7,-12.3 9.75,-8.4 16.05,-25.35 16.05,-43.2 0,-9.9 -2.85,-14.85 -8.4,-14.85 -7.05,0 -14.1,3.15 -22.2,9.9 -6.45,5.55 -10.5,10.65 -17.55,22.5 l 1.35,-6.15 c 1.35,-5.85 2.1,-9 2.25,-9.75 1.2,-6.45 1.65,-9.15 1.65,-11.85 0,-3 -1.35,-4.65 -4.05,-4.65 -3.75,0 -8.55,2.25 -15.3,7.35 l -12.6,9.3 1.95,4.05 4.8,-3.3 c 2.4,-1.65 4.5,-2.55 6.15,-2.55 1.05,0 1.65,0.75 1.65,2.4 0,3.9 -1.8,15.75 -3.6,23.4 l -11.85,51 c -1.95,8.25 -3,12.3 -4.8,18.3 z m 27.9,-58.8 c 2.4,-10.5 4.2,-15.15 9.3,-22.95 7.05,-10.8 15,-17.55 20.55,-17.55 2.85,0 4.2,3 4.2,8.55 0,10.65 -4.35,27 -10.05,37.2 -2.85,5.1 -7.2,8.1 -12,8.1 -4.8,0 -9,-1.2 -14.1,-4.05 z"/>
+  </svg>
   wrap.appendChild(el("h1", null, "A publication that assembles itself."));
   wrap.appendChild(el("p", "lead",
     "Telepatch turns one Telegraph page into a small website. " +
@@ -3762,7 +3899,14 @@ function landing() {
   for (const [cmd, why] of [
     ["/new", "Create an identity in Telegram. The bot keeps no copy of it."],
     ["/post", "Write. First line is the title, second line is your categories."],
-    ["/site", "Build your index. The bot hands you a link like the one below."]
+    ["/site", "Build your index. The bot hands you a link like the one below."],
+    ["/about", "Set the introduction for your site."],
+    ["/footer", "Set the footer for your site>."],
+    ["/link", "Include Web pages as site content."],
+    ["/unfile", "Remove entry from a site index."],
+    ["/repo", "Add a GitHub repository as a custom dashboard."], 
+    ["/newsite", "Create a new site using an existing identity."], 
+    ["/manage", "View all controls for any site / collection."]
   ]) {
     const li = el("li");
     li.append(el("code", null, cmd), el("span", null, why));
