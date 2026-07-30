@@ -3955,6 +3955,13 @@ function landing() {
   demoInput.autocomplete = "url";
   demoInput.spellcheck = false;
   demoButton.type = "submit";
+  const handleLandingHashChange = () => {
+    const next = route();
+    if (!next.master) return;
+    window.removeEventListener("hashchange", handleLandingHashChange);
+    start(next);
+  };
+  window.addEventListener("hashchange", handleLandingHashChange);
   demo.addEventListener("submit", ev => {
     ev.preventDefault();
     const page = pageFromTelegraphLink(demoInput.value);
