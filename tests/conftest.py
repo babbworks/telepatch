@@ -15,6 +15,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# So `import observer` works. bot.py is loaded by path below because it is a
+# loose module; the observer is a real package and imports normally.
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 
 @pytest.fixture(scope="session")
 def bot():

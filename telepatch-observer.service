@@ -1,0 +1,135 @@
+# telepatch-observer - publishes machine health to a Telegraph page.
+#
+# INSTALL ON THE POWERBOOK (exact commands, run as root):
+#
+#   cd /opt/telepatch && git pull
+#   cp telepatch-observer.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now telepatch-observer
+#   journalctl -u telepatch-observer -f
+#
+# Before the first start, /opt/telepatch/.env needs OBSERVER_TOKEN and
+# OBSERVER_PAGE_PATH. See .env.example. The service exits immediately with
+# a clear message if either is missing, so a failed start is not a mystery.
+#
+# Assumes the repo at /opt/telepatch and the venv at /opt/telepatch/.venv,
+# matching telepatch-bot.service. Adjust below if your paths differ - see
+# deployment-details.md, which currently disagrees with the bot unit about
+# the User (mp vs telepatch) and is worth reconciling.
+
+[Unit]
+Description=Telepatch observer - machine and service reporting
+Documentation=https://github.com/babbworks/telepatch
+After=network-online.target
+Wants=network-online.target
+
+# Wants, deliberately NOT Requires or BindsTo. The observer's whole reason
+# to be a separate service is that it keeps reporting when the bot is dead.
+# Binding it to the bot would take down the thing that tells you the bot
+# went down, which is the one moment it matters.
+Wants=telepatch-bot.service
+After=telepatch-bot.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+
+# Root is not required - /proc and /sys reads, systemctl show and
+# LogsDirectory all work unprivileged. It is chosen because it sidesteps
+# group permissions on the bot's /run/telepatch counters and on the
+# journal, on a machine that is awkward to reach.
+#
+# TO RUN UNPRIVILEGED INSTEAD (preferred once the sensor paths are
+# confirmed and you can get to the machine easily):
+#
+#   User=telepatch
+#   Group=telepatch
+#   SupplementaryGroups=systemd-journal
+#
+# and confirm the bot's RuntimeDirectoryMode lets that user read
+# /run/telepatch/counters.json.
+User=root
+Group=root
+
+WorkingDirectory=/opt/telepatch
+EnvironmentFile=/opt/telepatch/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/opt/telepatch/.venv/bin/python -m observer
+
+# The observer dials out to api.telegra.ph every 30 minutes. A dropped
+# connection is already handled inside publish.py; this is for the case
+# where the process itself dies.
+Restart=always
+RestartSec=10
+
+# The loop pings at half this interval. A wedged sample tick - a /sys read
+# that blocks forever on a failing sensor, which on 2005 hardware is a real
+# possibility - stops the pings and systemd restarts it.
+WatchdogSec=300
+
+# /var/log/telepatch, created and owned by systemd. Both observer.log and
+# samples.log live here. Nothing else on the disk is written.
+LogsDirectory=telepatch
+LogsDirectoryMode=0750
+
+# ---------------------------------------------------------------- hardening
+#
+# Root with no capabilities, which is much closer to the bot's posture than
+# plain root. Every capability is dropped, including the ones root would
+# normally have implicitly.
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=true
+
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+# Outbound HTTPS to Telegraph, plus AF_UNIX for sd_notify and for talking
+# to systemd.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# READ THIS BEFORE CHANGING ProtectSystem
+# --------------------------------------
+# strict mounts the whole hierarchy read-only except /dev, /proc and /sys -
+# and that INCLUDES /run. Connecting to a unix socket needs write
+# permission on the socket inode, so `systemctl show` cannot reach systemd
+# through a read-only /run and every service reading comes back empty.
+#
+# The failure is visible rather than silent: the published page prints
+# "systemd did not answer. The state of the bot is unknown." If you see
+# that line, this block is the first thing to suspect.
+#
+# The leading dash means "if it exists" - a missing /run/dbus must not stop
+# the unit from starting.
+ProtectSystem=strict
+ReadWritePaths=-/run/systemd
+ReadWritePaths=-/run/dbus
+
+# ProtectProc hides other processes' /proc entries but leaves the global
+# files this service actually reads - /proc/stat, /proc/loadavg,
+# /proc/meminfo, /proc/cpuinfo, /proc/uptime - fully visible.
+ProtectProc=invisible
+
+# It samples once every two minutes and holds fifteen readings. If this
+# ceiling is ever hit, that is a leak rather than a busy afternoon.
+MemoryMax=128M
+TasksMax=16
+CPUQuota=25%
+
+[Install]
+WantedBy=multi-user.target

@@ -44,6 +44,7 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -112,6 +113,96 @@ OPERATOR_CHAT = config("OPERATOR_CHAT")
 HEARTBEAT_URL = config("HEARTBEAT_URL")
 HEARTBEAT_SECONDS = int(config("HEARTBEAT_SECONDS", "300"))
 LOG_LEVEL = config("LOG_LEVEL", "INFO").upper()
+
+
+# -----------------------
+# Activity counters
+# -----------------------
+
+# What telepatch-observer publishes. Read the privacy section of
+# docs/superpowers/specs/2026-08-01-observer-design.md before touching any
+# of this - the guarantee it describes lives here, not in the observer.
+#
+# THE RULE: tally() takes one argument and that argument must be a string
+# literal from COUNTED. No token, chat id, user id, title, path or category
+# may ever reach it, and no f-string or variable may ever be passed to it.
+#
+# This is not a convention. tests/test_observer_tally.py walks the AST of
+# this file, finds every tally() call site, and fails if any argument is
+# not a literal in the set below. An edit that interpolates a variable
+# fails the suite rather than quietly publishing somebody's identity.
+#
+# Counters are RAM only. They are written to tmpfs (see export_counters)
+# and systemd deletes that directory when this unit stops, so nothing here
+# survives a restart. That is the property /privacy will describe.
+COUNTED = frozenset({
+    "command.total",       # any /command, without recording which person
+    "page.published",      # a createPage that succeeded
+    "index.rebuilt",       # an index rewritten by insert_entry
+    "telegraph.call",      # every Telegraph API request
+    "telegraph.failed",    # ... and the ones that did not come back
+    "error",               # anything that reached on_error
+})
+
+COUNTS = {}
+
+STARTED = time.time()
+
+# Where the observer reads them from. tmpfs, created by
+# RuntimeDirectory=telepatch in the unit and destroyed with the service.
+COUNTERS_PATH = config("COUNTERS_PATH", "/run/telepatch/counters.json")
+
+
+def tally(event):
+    """
+    One event happened. Which one, and nothing else about it.
+
+    The increment is the privacy mechanism: `+= 1` is irreversible and
+    retains nothing about the update that caused it. An unrecognised name
+    is dropped rather than counted under itself, so a bad edit that gets
+    past the test still cannot invent a new public key at runtime.
+    """
+
+    if event in COUNTED:
+        COUNTS[event] = COUNTS.get(event, 0) + 1
+
+
+def export_counters():
+    """
+    Hand the current counts to the observer.
+
+    Written to a temporary file and renamed, because the observer reads on
+    its own timer with no lock between us - rename is atomic, so it sees
+    either the previous snapshot or this one, never half of one.
+
+    Fails silently on purpose. No /run/telepatch means either a laptop or a
+    unit without RuntimeDirectory=, and neither is a reason to take the bot
+    down. The observer reports the absence as "not exporting", which is
+    honest and visible.
+    """
+
+    payload = {"since": STARTED, "events": dict(COUNTS)}
+    temporary = COUNTERS_PATH + ".tmp"
+
+    try:
+        os.makedirs(os.path.dirname(COUNTERS_PATH), exist_ok=True)
+
+        with open(temporary, "w") as handle:
+            json.dump(payload, handle)
+
+        # The unit sets UMask=0077, so this would land as 0600 and only be
+        # readable by root or by this account. That works while the observer
+        # runs as root and silently stops working the moment it does not -
+        # exactly the assumption RuntimeDirectoryMode=0755 was chosen to
+        # avoid. The file holds counts and nothing else; there is nothing
+        # in it to protect.
+        os.chmod(temporary, 0o644)
+
+        os.replace(temporary, COUNTERS_PATH)
+
+    except OSError as error:
+        log.debug("counters.export.failed error=%s", error)
+
 
 TELEGRAPH_API = "https://api.telegra.ph"
 
@@ -432,6 +523,14 @@ def _post(method, **params):
     attempts = 1 if method in NEVER_RETRY else RETRIES
     last = None
 
+    # Every Telegraph request in the process funnels through here,
+    # including the pooled workers that call _post directly rather than
+    # going through telegraph(). Counting at this one choke point is what
+    # keeps every tally() argument a literal - the alternative was
+    # tally("telegraph." + method) at three call sites, which is exactly
+    # the dynamic key the AST test exists to forbid.
+    tally("telegraph.call")
+
     for attempt in range(attempts):
 
         try:
@@ -445,6 +544,9 @@ def _post(method, **params):
                 if not payload.get("ok"):
                     raise RuntimeError(payload.get("error", "unknown Telegraph error"))
 
+                if method == "createPage":
+                    tally("page.published")
+
                 return payload["result"]
 
             last = RuntimeError(f"Telegraph returned {response.status_code}")
@@ -454,6 +556,8 @@ def _post(method, **params):
 
         if attempt + 1 < attempts:
             time.sleep(BACKOFF * (2 ** attempt) + random.random() * 0.1)
+
+    tally("telegraph.failed")
 
     log.warning("telegraph.failed method=%s attempts=%s error=%s",
                 method, attempts, last)
@@ -1672,6 +1776,8 @@ def insert_entry(token, path, url, title, categories, excerpt, minutes=0):
         author_name=page.get("author_name") or "",
         author_url=page.get("author_url") or "",
     )
+
+    tally("index.rebuilt")
 
     return page["title"]
 
@@ -3712,6 +3818,23 @@ async def register_commands(app):
     ])
 
 
+async def count_command(update, context):
+    """
+    One tally per command, and nothing else.
+
+    Deliberately does not record *which* command. A per-command breakdown
+    is a second dimension, and dimensions are how aggregate counts turn
+    back into individual records - see the privacy notes in the design
+    spec. The page shows a total, so a total is all that is counted.
+    """
+
+    message = getattr(update, "effective_message", None)
+    text = getattr(message, "text", None) or ""
+
+    if text.startswith("/"):
+        tally("command.total")
+
+
 async def on_error(update, context):
     """
     Anything a handler did not expect. Without this an exception vanishes
@@ -3719,6 +3842,12 @@ async def on_error(update, context):
     """
 
     log.exception("handler.failed", exc_info=context.error)
+
+    # The class of the exception is deliberately not recorded. Exception
+    # names are not a closed set - a Telegraph error string or a URL can
+    # end up in one - and a public counter keyed on arbitrary text is the
+    # exact shape COUNTED exists to prevent.
+    tally("error")
 
     message = getattr(update, "effective_message", None)
 
@@ -3813,6 +3942,18 @@ async def heartbeat(app):
     await asyncio.to_thread(SESSION.get, HEARTBEAT_URL, timeout=10)
 
 
+async def export_tick(app):
+    """
+    Publish the counters for telepatch-observer to read.
+
+    Goes to a thread because it touches the filesystem, and the event loop
+    serves everyone's commands. It is a tiny write to tmpfs, but "tiny" and
+    "never blocks" are different promises.
+    """
+
+    await asyncio.to_thread(export_counters)
+
+
 async def on_start(app):
     await register_commands(app)
 
@@ -3827,6 +3968,11 @@ async def on_start(app):
 
     if HEARTBEAT_URL:
         every(HEARTBEAT_SECONDS, heartbeat, app)
+
+    # Faster than the observer samples (120s) so it always has something
+    # current to read, and cheap enough that the interval does not matter -
+    # this is a few hundred bytes to tmpfs.
+    every(60, export_tick, app)
 
     log.info("telepatch.started watchdog=%s heartbeat=%s operator=%s",
              f"{window:.0f}s" if window else "off",
@@ -3858,6 +4004,13 @@ def main():
     )
 
     app.add_error_handler(on_error)
+
+    # Group -1 runs before the command handlers and does not consume the
+    # update, so this counts without changing what anything else sees. One
+    # insertion point instead of twenty CommandHandler wrappers, and
+    # nothing about which command or which person is recorded - see
+    # COUNTED at the top of this file.
+    app.add_handler(TypeHandler(Update, count_command, block=False), group=-1)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("howto", howto))

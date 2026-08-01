@@ -369,10 +369,28 @@ Tests:
 
 ### As a service
 
+From nothing to a running server on a fresh machine:
+
+```sh
+sudo git clone https://github.com/babbworks/telepatch.git /opt/telepatch
+cd /opt/telepatch
+sudo cp .env.example .env && sudo nano .env     # add TELEGRAM_TOKEN
+sudo ./install.sh
+```
+
+`install.sh` creates the service account, builds the venv, fixes the `.env`
+permissions, installs the units and starts them. `./deploy.sh local`
+updates that install afterwards; `./deploy.sh user@host` does the same over
+ssh.
+
 `telepatch-bot.service` is a systemd unit with the paths, hardening,
-resource ceilings and watchdog already set; `./deploy.sh user@host` stops,
-updates and restarts it. Because the bot is stateless, one instance serves
-any number of publishers with no per-user storage and nothing to back up.
+resource ceilings and watchdog already set. Because the bot is stateless,
+one instance serves any number of publishers with no per-user storage and
+nothing to back up.
+
+Set `OBSERVER_TOKEN` and `OBSERVER_PAGE_PATH` in `.env` and `install.sh`
+also sets up [telepatch-observer](docs/observer.md), which publishes the
+machine's health to a Telegraph page every thirty minutes.
 
 Long polling dials out and listens on nothing, so there is no port to
 expose, no certificate to renew and no domain required. **Only one process

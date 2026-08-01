@@ -41,7 +41,21 @@ WatchdogSec=180
 TimeoutStopSec=30
 KillSignal=SIGINT
 
-# The bot writes nothing and needs nothing, so give it nothing.
+# The one thing the bot now writes: activity counters for
+# telepatch-observer, at /run/telepatch/counters.json.
+#
+# This is tmpfs, and systemd DELETES it when the unit stops. That is the
+# point rather than a side effect - it is what makes "no counter survives a
+# restart" a property of the deployment instead of a promise in prose. See
+# COUNTED in bot.py and the privacy section of
+# docs/superpowers/specs/2026-08-01-observer-design.md.
+#
+# 0755 so a future unprivileged observer can read it. The file holds counts
+# and nothing else; there is nothing in it to protect.
+RuntimeDirectory=telepatch
+RuntimeDirectoryMode=0755
+
+# Beyond that the bot writes nothing and needs nothing, so give it nothing.
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
