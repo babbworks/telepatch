@@ -185,6 +185,13 @@ connecting to a unix socket needs write permission on the socket inode, so
 fails, comment out `ProtectSystem=strict` and confirm that is the cause
 before looking anywhere else.
 
+**The page says the unit "is not installed on this machine."**
+`OBSERVER_UNIT` names a unit systemd has never heard of — a typo, or the
+bot installed under a different name. Worth knowing why this is a distinct
+message: systemd reports `inactive`/`dead` for a unit that does not exist,
+which is indistinguishable from a bot that crashed unless `LoadState` is
+read. "Never installed" and "died" deserve very different reactions.
+
 **The page says the bot is not exporting counters.**
 Either the bot has not been restarted since the `RuntimeDirectory=` change,
 or it is an older build. Check `/run/telepatch/counters.json` exists.

@@ -205,6 +205,8 @@ class Observer:
             activity_hour=completed.get("label"),
             suppress=aggregate.suppressed,
             sample_count=len(samples),
+            sample_seconds=SAMPLE_SECONDS,
+            window=render.human_interval(PUBLISH_SECONDS),
         )
 
     def publish(self):

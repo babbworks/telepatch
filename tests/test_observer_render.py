@@ -225,3 +225,23 @@ def test_a_unit_that_was_never_installed_says_so():
 
     assert "is not installed on this machine" in text
     assert "inactive" not in text
+
+
+def test_sampling_interval_is_not_hardcoded():
+    """
+    The page used to claim "two minutes apart" as a constant while the real
+    interval was OBSERVER_SAMPLE_SECONDS. Anything but the default made it
+    state a falsehood about its own data.
+    """
+
+    assert "30 seconds apart" in render.to_text(page(sample_seconds=30))
+    assert "two minutes apart" in render.to_text(page(sample_seconds=120))
+    assert "five minutes apart" in render.to_text(page(sample_seconds=300))
+
+
+def test_interval_phrasing():
+    assert render.human_interval(60) == "one minute"
+    assert render.human_interval(120) == "two minutes"
+    assert render.human_interval(1800) == "30 minutes"
+    assert render.human_interval(45) == "45 seconds"
+    assert render.human_interval(None) == "an unknown interval"

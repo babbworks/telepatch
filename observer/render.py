@@ -68,6 +68,29 @@ def human_bytes(value):
     return f"{value:.0f}B"
 
 
+def human_interval(seconds):
+    """
+    A sampling interval as a phrase: "two minutes", "30 seconds".
+
+    Exists because the page used to state "two minutes apart" as a
+    constant while the real interval was OBSERVER_SAMPLE_SECONDS. Anything
+    but the default made the page lie about its own data.
+    """
+
+    if not seconds:
+        return "an unknown interval"
+
+    seconds = int(seconds)
+
+    if seconds % 60:
+        return f"{seconds} seconds"
+
+    minutes = seconds // 60
+    words = {1: "one", 2: "two", 3: "three", 5: "five", 10: "ten", 15: "fifteen"}
+
+    return f"{words.get(minutes, minutes)} minute" + ("" if minutes == 1 else "s")
+
+
 def human_seconds(value):
     """
     Duration at two units of precision. '12d 3h' rather than
@@ -266,7 +289,8 @@ def render(now, machine, summary, status, counts, sources,
            memory_total=None, disk_used=None, disk_total=None,
            uptime=None, battery_status=None, restarted=False,
            exporting=True, activity_hour=None, suppress=str,
-           sample_count=0):
+           sample_count=0, sample_seconds=120, window="30 minutes",
+           activity_label="hour ending"):
     """
     The whole page as (kind, text) sections.
 
@@ -289,20 +313,20 @@ def render(now, machine, summary, status, counts, sources,
         ("h3", title),
         ("pre", machine_section(machine)),
 
-        ("h3", f"Machine - 30 minutes to {stamp}"),
+        ("h3", f"Machine - {window} to {stamp}"),
         ("pre", health_section(
             summary, memory_total, disk_used, disk_total,
             uptime, battery_status,
         )),
         ("p", (
-            f"Mean of {sample_count} samples taken two minutes apart. "
-            f"Sensors: {resolved}."
+            f"Mean of {sample_count} samples taken "
+            f"{human_interval(sample_seconds)} apart. Sensors: {resolved}."
         )),
 
         ("h3", "telepatch-bot.service"),
         ("pre", service_section(status)),
 
-        ("h3", f"Activity - hour ending {activity_hour or 'unknown'}"),
+        ("h3", f"Activity - {activity_label} {activity_hour or 'unknown'}"),
         ("pre", activity_section(counts, suppress, restarted, exporting)),
 
         ("p", PRIVACY),
