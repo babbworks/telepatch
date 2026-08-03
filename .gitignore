@@ -9,6 +9,9 @@ __pycache__/
 .venv/
 venv/
 
+# Working notes that live beside the code without being part of it.
+untracked-docs/
+
 # Editors and OS
 .DS_Store
 *.swp
