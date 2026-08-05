@@ -15,6 +15,11 @@
 # directory and running it from there also works.
 #
 # Idempotent apart from the venv, which is rebuilt every time.
+#
+# Pass a profile name to also layer machine-specific systemd overrides from
+# deploy/<profile>/ on top of the base units - e.g. `sudo ./install.sh
+# powerbook` applies deploy/powerbook/*.service.d/*.conf. Optional; omit it
+# for a plain install. See deployment-details.md for what each profile is.
 
 set -euo pipefail
 
@@ -22,6 +27,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 DST="${TELEPATCH_DIR:-/opt/telepatch}"
 SVC_USER="${TELEPATCH_USER:-telepatch}"
+PROFILE="${1:-${TELEPATCH_PROFILE:-}}"
 
 say() { printf '\n==> %s\n' "$*"; }
 
@@ -168,6 +174,26 @@ UNITS="telepatch-bot"
 if [ "$WANT_OBSERVER" = yes ]; then
   install -m 644 "$DST/telepatch-observer.service" /etc/systemd/system/
   UNITS="$UNITS telepatch-observer"
+fi
+
+# ------------------------------------------------------------- profile
+
+if [ -n "$PROFILE" ]; then
+  PROFILE_DIR="$DST/deploy/$PROFILE"
+
+  if [ -d "$PROFILE_DIR" ]; then
+    say "applying '$PROFILE' profile overrides"
+
+    for d in "$PROFILE_DIR"/*.service.d; do
+      [ -d "$d" ] || continue
+      unit_dir="/etc/systemd/system/$(basename "$d")"
+      mkdir -p "$unit_dir"
+      install -m 644 "$d"/*.conf "$unit_dir/"
+      echo "    $(basename "$unit_dir")"
+    done
+  else
+    echo "    no deploy/$PROFILE directory - skipping profile overrides" >&2
+  fi
 fi
 
 systemctl daemon-reload
