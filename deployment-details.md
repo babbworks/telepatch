@@ -1,27 +1,29 @@
 # Where this runs
 
-Two machines, both live: `deb` is the day-to-day host, the PowerBook runs
-the same units plus one machine-specific override. See
-[Profiles](#profiles) below for how that override is kept in the repo
-instead of only existing on the machine.
+Two machines, one live host: the PowerBook is now the day-to-day host as
+of the 2026-08-05 cutover below. `deb` is retired but not decommissioned -
+its install is intact, stopped and disabled, in case of a rollback. See
+[Profiles](#profiles) below for how the PowerBook's one machine-specific
+override is kept in the repo instead of only existing on the machine.
 
 ---
 
-## deb — current, since 2026-08-01
+## deb — retired 2026-08-05, live 2026-08-01 to 2026-08-05
 
-Running `telepatch-bot` and `telepatch-observer` as **system** services,
-both enabled at boot.
+Ran `telepatch-bot` and `telepatch-observer` as **system** services here
+first. Both are now `stop`ped and `disable`d, in that order, per the
+cutover procedure in [docs/server-setup.md](docs/server-setup.md#6-cutover)
+- confirmed clean by the absence of any further `telegram.error.Conflict`
+in the PowerBook's bot log after the stop.
 
 ```
 Install       /opt/telepatch              root:root 0755
-Units         /etc/systemd/system/telepatch-bot.service
-              /etc/systemd/system/telepatch-observer.service
+Units         /etc/systemd/system/telepatch-bot.service       (stopped, disabled)
+              /etc/systemd/system/telepatch-observer.service  (stopped, disabled)
 Bot user      telepatch                   (system account, nologin)
 Observer user root                        (all capabilities dropped)
 Python        /opt/telepatch/.venv
 Environment   /opt/telepatch/.env         root:telepatch 0640
-Counters      /run/telepatch/counters.json  tmpfs, dies with the unit
-Logs          /var/log/telepatch/           observer.log, samples.log
 ```
 
 **`.env` must be 0640 root:telepatch, not 0600 root:root.** systemd reads
@@ -29,16 +31,14 @@ Logs          /var/log/telepatch/           observer.log, samples.log
 `bot.py:52` also calls `load_dotenv()` after privileges are dropped, and
 dies with `PermissionError` before `main()`. `Restart=always` turns that
 into a crash loop reporting "activating" with nothing in the journal to
-explain it. See [docs/observer.md](docs/observer.md).
+explain it. See [docs/observer.md](docs/observer.md). Relevant again only
+if this machine is ever brought back as the active host.
 
-The `--user` unit that previously ran here is **disabled**. It must stay
-that way: two processes polling one Telegram token do not error, they split
-the updates between them, which reads as random message loss. `morgen` has
-`Linger=yes`, so a re-enabled user unit would start at boot and conflict.
-
-Installed with `sudo ./install.sh`. Updates via
-`sudo systemctl restart telepatch-bot telepatch-observer`, or `./deploy.sh
-local` once a change is pushed.
+**Do not re-enable either unit while the PowerBook is running the same
+TELEGRAM_TOKEN.** Two processes polling one Telegram token do not error,
+they split the updates between them, which reads as random message loss -
+`telegram.error.Conflict: terminated by other getUpdates request` in the
+journal is the actual symptom, seen and resolved during this cutover.
 
 ---
 
