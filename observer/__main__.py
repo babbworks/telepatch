@@ -58,6 +58,12 @@ PAGE_PATH = config("OBSERVER_PAGE_PATH", required=True)
 SAMPLE_SECONDS = int(config("OBSERVER_SAMPLE_SECONDS", "120"))
 PUBLISH_SECONDS = int(config("OBSERVER_PUBLISH_SECONDS", "1800"))
 
+# How many completed hours the Activity section shows side by side. Each
+# column is still a whole completed hour, still passes through the same
+# <5 suppression - more columns is more of the same resolution, not a
+# finer one. See activity_section() in render.py.
+ACTIVITY_HISTORY_HOURS = int(config("OBSERVER_ACTIVITY_HOURS", "6"))
+
 LOG_PATH = config("OBSERVER_LOG", "/var/log/telepatch/observer.log")
 SAMPLE_LOG = logfile.sample_path(LOG_PATH)
 
@@ -118,11 +124,13 @@ class Observer:
         self.sources = {}
 
         # Hourly activity. hour_start is the counter snapshot taken at the
-        # top of the current hour; completed is the last whole hour, which
-        # is the only thing that ever reaches the page.
+        # top of the current hour; completed holds the last
+        # ACTIVITY_HISTORY_HOURS whole hours, oldest first, which is what
+        # ever reaches the page. A maxlen deque means the oldest column
+        # simply falls off as a new one closes - no manual trimming.
         self.hour = utc_now().replace(minute=0, second=0, microsecond=0)
         self.hour_start = counters.events(counters.read(COUNTERS))
-        self.completed = None
+        self.completed = collections.deque(maxlen=ACTIVITY_HISTORY_HOURS)
 
     # ------------------------------------------------------------ sample
 
@@ -159,16 +167,19 @@ class Observer:
         snapshot = counters.events(counters.read(COUNTERS))
         delta, restarted = aggregate.counter_delta(self.hour_start, snapshot)
 
-        self.completed = {
+        self.completed.append({
             "label": self.hour.strftime("%H:%M UTC"),
             "counts": delta,
             "restarted": restarted,
-        }
+        })
 
         self.hour = now_hour
         self.hour_start = snapshot
 
-        log.info("hour.closed at=%s restarted=%s", self.completed["label"], restarted)
+        log.info(
+            "hour.closed at=%s restarted=%s history=%s",
+            self.completed[-1]["label"], restarted, len(self.completed),
+        )
 
     # ----------------------------------------------------------- publish
 
@@ -183,26 +194,22 @@ class Observer:
             uptime_seconds=aggregate.latest(samples, "uptime"),
         )
 
-        completed = self.completed or {}
-
         return render.render(
             now=utc_now(),
             machine=self.machine,
             summary=summary,
             status=status,
-            counts=completed.get("counts", {}),
+            history=list(self.completed),
             sources=self.sources,
             memory_total=aggregate.latest(samples, "memory_total"),
             disk_used=aggregate.latest(samples, "disk_used"),
             disk_total=aggregate.latest(samples, "disk_total"),
             uptime=aggregate.latest(samples, "uptime"),
             battery_status=aggregate.latest(samples, "battery_status"),
-            restarted=completed.get("restarted", False),
             # No completed hour yet means the service started less than an
             # hour ago. Saying "collecting" is honest; showing zeros would
             # claim an idle hour we never observed.
             exporting=bool(self.completed) and counters.available(COUNTERS),
-            activity_hour=completed.get("label"),
             suppress=aggregate.suppressed,
             sample_count=len(samples),
             sample_seconds=SAMPLE_SECONDS,

@@ -203,8 +203,11 @@ silently half an hour later. `journalctl -u telepatch-observer -n 20` will
 name which setting.
 
 **Activity says "hour ending unknown".**
-Normal for the first hour after a start. Activity reports the last
-*completed* hour, so there is nothing to show until one has passed.
+Normal for the first hour after a start. Activity reports completed hours
+only, so there is nothing to show until one has passed. After that, each
+row shows up to `OBSERVER_ACTIVITY_HOURS` completed hours side by side
+(default 6, oldest first) rather than just the latest one, filling in one
+column at a time as the service keeps running.
 
 **Nothing on the page changes.**
 Check the local log first — `/var/log/telepatch/observer.log` is written
@@ -261,6 +264,7 @@ publicised.
 | sample | every 120 s |
 | publish | every 1800 s (48/day) |
 | activity boundary | top of each hour |
+| activity columns shown | 6 completed hours, oldest first |
 
 Telegraph documents no rate limits. For scale, one `/site` rebuild in the
 bot can fire ~200 API calls in a burst (`SCAN_WORKERS = 8` over

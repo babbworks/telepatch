@@ -48,13 +48,16 @@ def page(**overrides):
         machine=MACHINE,
         summary=SUMMARY,
         status=STATUS,
-        counts={"command.total": 412, "page.published": 2},
+        history=[{
+            "label": "14:00 UTC",
+            "counts": {"command.total": 412, "page.published": 2},
+            "restarted": False,
+        }],
         sources={"temperature": "/sys/x", "fan_rpm": None},
         memory_total=1024 ** 3,
         uptime=1_040_000,
         battery_status="AC",
         exporting=True,
-        activity_hour="14:00 UTC",
         suppress=aggregate.suppressed,
         sample_count=15,
     )
@@ -161,10 +164,58 @@ def test_small_activity_counts_are_suppressed():
     assert "<5" in text             # pages published, below it
 
 
+def test_multiple_hours_render_side_by_side():
+    text = render.to_text(page(history=[
+        {"label": "12:00 UTC", "counts": {"command.total": 3}, "restarted": False},
+        {"label": "13:00 UTC", "counts": {"command.total": 412}, "restarted": False},
+    ]))
+
+    assert "last 2 hours, ending 13:00 UTC" in text
+    assert "<5, 412" in text
+
+
+def test_each_hour_is_suppressed_independently():
+    """
+    A quiet hour next to a busy one must not let the busy one's count carry
+    over - each column passes through suppress() on its own, so a 9 next to
+    a 1 still reads as 9 next to <5, not as a two-hour total.
+    """
+
+    text = render.to_text(page(history=[
+        {"label": "12:00 UTC", "counts": {"page.published": 1}, "restarted": False},
+        {"label": "13:00 UTC", "counts": {"page.published": 9}, "restarted": False},
+    ]))
+
+    assert "<5, 9" in text
+
+
+def test_no_completed_hour_yet():
+    """Fewer than one full hour since start - the original single-column
+    wording, not an empty trend."""
+
+    text = render.to_text(page(history=[]))
+
+    assert "Activity - hour ending unknown" in text
+    assert "no hour has completed yet" in text
+
+
+def test_a_single_hour_reads_exactly_as_before():
+    """One completed hour must not gain a 'last 1 hours' plural."""
+
+    text = render.to_text(page())
+
+    assert "Activity - hour ending 14:00 UTC" in text
+    assert "last 1 hours" not in text
+
+
 def test_a_restart_is_disclosed():
     """A partial count published as a whole one would be a quiet lie."""
 
-    text = render.to_text(page(restarted=True))
+    text = render.to_text(page(history=[{
+        "label": "14:00 UTC",
+        "counts": {"command.total": 412, "page.published": 2},
+        "restarted": True,
+    }]))
 
     assert "partial count" in text
 

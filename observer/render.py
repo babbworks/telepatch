@@ -244,9 +244,9 @@ ACTIVITY_LABELS = (
 )
 
 
-def activity_section(counts, suppress, restarted, exporting):
+def activity_section(history, suppress, exporting):
     """
-    The last completed hour.
+    Completed hours, oldest to newest, one row per counted event.
 
     Not the current 30-minute block, on purpose. A count that advances
     every half hour hands anyone who polls this page a 30-minute-resolution
@@ -254,6 +254,11 @@ def activity_section(counts, suppress, restarted, exporting):
     a delta of 1 correlates trivially against the page that just appeared
     on somebody's Telegraph account. An hourly figure that does not move
     between rollovers gives that observer nothing.
+
+    Showing several completed hours side by side is not a finer window -
+    every column is still a whole completed hour, still passed through the
+    same suppress() below 5. It is the same resolution shown more than
+    once, not a new one.
     """
 
     if not exporting:
@@ -262,15 +267,21 @@ def activity_section(counts, suppress, restarted, exporting):
             "for this period. This is not the same as no activity."
         )
 
+    if not history:
+        return "Collecting - no hour has completed yet."
+
     lines = [
-        leader(label, suppress(counts.get(key, 0)))
+        leader(label, ", ".join(
+            suppress(hour["counts"].get(key, 0)) for hour in history
+        ))
         for key, label in ACTIVITY_LABELS
     ]
 
-    if restarted:
+    if any(hour.get("restarted") for hour in history):
         lines.append("")
-        lines.append("The bot restarted during this hour. Counters live in")
-        lines.append("tmpfs and reset with it, so these are a partial count.")
+        lines.append("The bot restarted at least once in this window. Counters")
+        lines.append("live in tmpfs and reset with it, so some figures here are")
+        lines.append("partial counts.")
 
     return block(lines)
 
@@ -285,18 +296,17 @@ PRIVACY = (
 )
 
 
-def render(now, machine, summary, status, counts, sources,
+def render(now, machine, summary, status, history, sources,
            memory_total=None, disk_used=None, disk_total=None,
-           uptime=None, battery_status=None, restarted=False,
-           exporting=True, activity_hour=None, suppress=str,
-           sample_count=0, sample_seconds=120, window="30 minutes",
-           activity_label="hour ending"):
+           uptime=None, battery_status=None,
+           exporting=True, suppress=str,
+           sample_count=0, sample_seconds=120, window="30 minutes"):
     """
     The whole page as (kind, text) sections.
 
-    `now` and `activity_hour` arrive as arguments rather than being read
-    from a clock so that this function is pure and the tests can pin a
-    time. Everything user-visible is decided here.
+    `now` arrives as an argument rather than being read from a clock so
+    that this function is pure and the tests can pin a time. Everything
+    user-visible is decided here.
     """
 
     stamp = now.strftime("%Y-%m-%d %H:%M UTC")
@@ -306,6 +316,15 @@ def render(now, machine, summary, status, counts, sources,
         f"{name}={'yes' if path else 'no'}"
         for name, path in sorted(sources.items())
     )
+
+    if not history:
+        activity_heading = "Activity - hour ending unknown"
+    elif len(history) == 1:
+        activity_heading = f"Activity - hour ending {history[0]['label']}"
+    else:
+        activity_heading = (
+            f"Activity - last {len(history)} hours, ending {history[-1]['label']}"
+        )
 
     return [
         ("aside", "server, operations"),
@@ -326,8 +345,8 @@ def render(now, machine, summary, status, counts, sources,
         ("h3", "telepatch-bot.service"),
         ("pre", service_section(status)),
 
-        ("h3", f"Activity - {activity_label} {activity_hour or 'unknown'}"),
-        ("pre", activity_section(counts, suppress, restarted, exporting)),
+        ("h3", activity_heading),
+        ("pre", activity_section(history, suppress, exporting)),
 
         ("p", PRIVACY),
 

@@ -109,6 +109,14 @@ as live as we like. **Activity shows the last completed hour** and does not
 move between rollovers, so all edits within an hour carry byte-identical
 activity figures. Counts below 5 render as `<5`.
 
+Activity shows `OBSERVER_ACTIVITY_HOURS` completed hours side by side
+(default 6), oldest first, one column per hour. This is not a finer
+window — every column is still one whole completed hour, independently
+passed through the same `<5` suppression, so a quiet hour next to a busy
+one still reads as `<5` next to the busy figure rather than leaking
+through it. It is the existing one-hour resolution shown more than once
+per publish, not a new resolution.
+
 **5. Nothing survives a restart.** Counters live in `/run/telepatch`, a
 tmpfs created by `RuntimeDirectory=telepatch` and **deleted by systemd when
 the unit stops**. "Nothing persists" becomes a property of the deployment
@@ -184,6 +192,7 @@ OBSERVER_TOKEN=            # telepatch-ops Telegraph token
 OBSERVER_PAGE_PATH=telepatch-server-performance-08-01
 OBSERVER_SAMPLE_SECONDS=120
 OBSERVER_PUBLISH_SECONDS=1800
+OBSERVER_ACTIVITY_HOURS=6
 OBSERVER_LOG=/var/log/telepatch/observer.log
 OBSERVER_UNIT=telepatch-bot.service
 ```
