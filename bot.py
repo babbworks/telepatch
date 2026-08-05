@@ -3099,16 +3099,32 @@ def split_master(content):
     )
 
 
-def read_external(content):
+# Used only to decide "is this href even a candidate for being one of our
+# own pages" before comparing its path against own_paths in read_external.
+# Deliberately narrower than a general URL check - a false match here just
+# means one more href gets a (cheap) path comparison, but a false miss
+# would treat a genuine telegra.ph page as an outward link.
+TELEGRAPH_HOST_RE = re.compile(r"^https?://(www\.)?telegra\.ph/", re.IGNORECASE)
+
+
+def read_external(content, own_paths=None):
     """
-    Index entries that are not Telegraph pages, kept verbatim.
+    Index entries that point outside this account, kept verbatim.
 
     /site regenerates the list from getPageList, which only knows this
-    account's Telegraph pages. A GitHub link added by hand would be wiped
-    on the next rebuild, so it is read back first — the same read-before-
-    write the dates, masthead and footer already need.
+    account's Telegraph pages. A GitHub link added by hand, or a /link
+    entry pointing at a *different* Telegraph account's page - another
+    Telepatch publication, say - would be wiped on the next rebuild
+    otherwise, so both are read back first, the same read-before-write the
+    dates, masthead and footer already need.
+
+    A telegra.ph href only counts as "ours" - and so is left for the
+    ordinary scan to regenerate, not kept here - when its path is actually
+    in own_paths. Any other telegra.ph page is exactly as external as a
+    GitHub link; the host alone was never a safe test for that.
     """
 
+    own_paths = own_paths or set()
     kept = []
 
     for node in split_master(content)[1]:
@@ -3134,7 +3150,10 @@ def read_external(content):
 
             href = (anchor.get("attrs") or {}).get("href", "")
 
-            if not href or href.startswith("/") or "telegra.ph" in href:
+            if not href or href.startswith("/"):
+                continue
+
+            if TELEGRAPH_HOST_RE.match(href) and telegraph_path(href) in own_paths:
                 continue
 
             text = "".join(k for k in kids if isinstance(k, str))
@@ -3494,10 +3513,11 @@ async def rebuild_site(message, token, master_path=None, title=None,
 
     else:
         filed = claimed_paths(scanned)
+        own_paths = {page["path"] for page, _ in scanned}
 
         entries, content = build_index(
             scanned, master_path, known_dates, masthead, footer,
-            read_byline(old), read_external(old), filed, recorded
+            read_byline(old), read_external(old, own_paths), filed, recorded
         )
 
         # Said out loud, always. A page quietly missing from a rebuild that
